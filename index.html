@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visualiseur GEDCOM</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fff;--bg2:#f5f4f0;--bg3:#eceae4;
+  --txt:#1a1916;--txt2:#6b6860;--txt3:#9e9b92;
+  --border:rgba(0,0,0,.12);--border2:rgba(0,0,0,.22);
+  --accent:#4a3f8c;--accent-bg:#eeedfe;--accent-txt:#3c3489;
+  --male-bg:#e6f1fb;--male-txt:#0c447c;
+  --female-bg:#fbeaf0;--female-txt:#72243e;
+  --r:10px;--rsm:6px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1c1b18;--bg2:#252420;--bg3:#2e2d28;
+  --txt:#f0ede6;--txt2:#9e9b92;--txt3:#6b6860;
+  --border:rgba(255,255,255,.1);--border2:rgba(255,255,255,.2);
+  --accent:#7f77dd;--accent-bg:#26215c;--accent-txt:#afa9ec;
+  --male-bg:#042c53;--male-txt:#b5d4f4;
+  --female-bg:#4b1528;--female-txt:#f4c0d1;
+}}
+body{font-family:Georgia,'Times New Roman',serif;background:var(--bg);color:var(--txt);font-size:14px;line-height:1.6}
+#app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#header{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:.5px solid var(--border2);background:var(--bg);flex-shrink:0;flex-wrap:wrap}
+#header h1{font-size:14px;font-weight:normal;font-style:italic;flex:1}
+#header h1 span{font-style:normal;font-weight:600;color:var(--accent)}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border:.5px solid var(--border2);border-radius:var(--rsm);font-size:12px;cursor:pointer;background:var(--bg);color:var(--txt);font-family:inherit;transition:background .12s}
+.btn:hover{background:var(--bg2)}
+.btn.primary{background:var(--accent-bg);color:var(--accent-txt);border-color:var(--accent)}
+.btn.primary:hover{background:var(--accent);color:#fff}
+#fileName{font-size:11px;color:var(--txt2);font-family:monospace}
+#fileInput{display:none}
+#gristNotice{font-size:11px;color:var(--txt3);padding:4px 8px;background:var(--bg2);border-radius:var(--rsm);display:none}
+#tabBar{display:flex;border-bottom:.5px solid var(--border);background:var(--bg);flex-shrink:0;padding:0 14px}
+.tab{padding:8px 14px;font-size:12px;cursor:pointer;border-bottom:2px solid transparent;color:var(--txt2);background:none;border-top:none;border-left:none;border-right:none;font-family:inherit;transition:color .12s}
+.tab:hover{color:var(--txt)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+#content{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.panel{display:none;flex:1;overflow-y:auto;padding:14px}
+.panel.active{display:flex;flex-direction:column}
+#panelTree.active{padding:10px 14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin-bottom:14px}
+.stat{background:var(--bg2);border-radius:var(--rsm);padding:10px 12px}
+.stat-label{font-size:10px;color:var(--txt2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px;font-family:'Helvetica Neue',Arial,sans-serif}
+.stat-val{font-size:22px;font-weight:600;color:var(--txt)}
+.search-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.search-row input,.search-row select{padding:6px 9px;border:.5px solid var(--border2);border-radius:var(--rsm);font-size:12px;background:var(--bg);color:var(--txt);font-family:inherit}
+.search-row input:focus,.search-row select:focus{outline:none;border-color:var(--accent)}
+.pager{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12px;color:var(--txt2);font-family:'Helvetica Neue',Arial,sans-serif}
+.pager button{padding:4px 10px;border:.5px solid var(--border2);border-radius:var(--rsm);font-size:11px;cursor:pointer;background:var(--bg);color:var(--txt);font-family:inherit}
+.pager button:disabled{opacity:.35;cursor:default}
+.detail-header{display:flex;align-items:flex-start;gap:12px;margin-bottom:14px}
+.detail-avatar{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0;font-family:'Helvetica Neue',Arial,sans-serif}
+.detail-name{font-size:16px;font-weight:600;color:var(--txt);margin-bottom:4px}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:600;font-family:'Helvetica Neue',Arial,sans-serif}
+.badge-m,.av-m{background:var(--male-bg);color:var(--male-txt)}
+.badge-f,.av-f{background:var(--female-bg);color:var(--female-txt)}
+.badge-u,.av-u{background:var(--bg3);color:var(--txt2)}
+.detail-box{background:var(--bg);border:.5px solid var(--border);border-radius:var(--r);padding:11px 13px;margin-bottom:10px}
+.detail-box-title{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--txt2);margin-bottom:8px;font-family:'Helvetica Neue',Arial,sans-serif}
+.detail-row{display:flex;gap:10px;padding:5px 0;border-bottom:.5px solid var(--border);font-size:12px;font-family:'Helvetica Neue',Arial,sans-serif}
+.detail-row:last-child{border-bottom:none}
+.dk{color:var(--txt2);min-width:90px;flex-shrink:0}
+.dv{color:var(--txt)}
+.link{color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.link:hover{opacity:.75}
+.fam-card{background:var(--bg2);border-radius:var(--rsm);padding:8px 11px;margin-bottom:7px;font-family:'Helvetica Neue',Arial,sans-serif}
+.fam-title{font-size:12px;font-weight:600;margin-bottom:4px;color:var(--txt)}
+.fam-sub{font-size:11px;color:var(--txt2)}
+.sec-title{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--txt2);margin-bottom:8px;font-family:'Helvetica Neue',Arial,sans-serif}
+.tree-controls{display:flex;align-items:center;gap:7px;margin-bottom:8px;flex-wrap:wrap;flex-shrink:0}
+#treeContainer{display:flex;gap:10px;flex:1;min-height:0}
+#treeViewport{flex:1;overflow:hidden;border:.5px solid var(--border);border-radius:var(--r);background:var(--bg2);position:relative;cursor:grab;user-select:none;min-height:0}
+#treeCanvas{position:absolute;top:0;left:0}
+#treeSidebar{display:none;width:280px;flex-shrink:0;border:.5px solid var(--border);border-radius:var(--r);background:var(--bg);overflow-y:auto;padding:12px;position:relative}
+#treeSidebar .close-btn{position:absolute;top:7px;right:9px;background:none;border:none;font-size:17px;cursor:pointer;color:var(--txt2);line-height:1;padding:0}
+#treeSidebar .close-btn:hover{color:var(--txt)}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 2rem;text-align:center;gap:10px;flex:1}
+.empty-ico{width:50px;height:50px;border-radius:50%;background:var(--bg2);display:flex;align-items:center;justify-content:center}
+.empty-title{font-size:15px;font-weight:600;color:var(--txt)}
+.empty-sub{font-size:13px;color:var(--txt2);max-width:300px;font-family:'Helvetica Neue',Arial,sans-serif}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <h1>G&eacute;n&eacute;alogie &mdash; <span>GEDCOM</span></h1>
+    <span id="gristNotice">Grist</span>
+    <label class="btn primary" for="fileInput">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 4a2 2 0 012-2h4l4 4v6a2 2 0 01-2 2H4a2 2 0 01-2-2V4z" stroke="currentColor" stroke-width="1" fill="none"/><path d="M9 2v3a1 1 0 001 1h3" stroke="currentColor" stroke-width="1"/></svg>
+      Ouvrir .ged
+    </label>
+    <input type="file" id="fileInput" accept=".ged,.gedcom">
+    <span id="fileName"></span>
+  </div>
+  <div id="tabBar">
+    <button class="tab active" data-tab="tree">Arbre</button>
+    <button class="tab" data-tab="list">Individus</button>
+    <button class="tab" data-tab="families">Familles</button>
+  </div>
+  <div id="content">
+    <div class="panel active" id="panelTree"></div>
+    <div class="panel" id="panelList"></div>
+    <div class="panel" id="panelFamilies"></div>
+  </div>
+</div>
+<script>
+/* STATE */
+var gedData={individuals:{},families:{},sources:{}};
+var selectedId=null,treeRootId=null,currentPage=0,PAGE=30;
+var filteredIds=[],activeTab='tree';
+var searchNom='',searchPrenom='',filterSex2='';
+var gristMode=false,gristDefaultId=null,gristPendingStartRef='';
+
+/* Cherche la première clé correspondante dans un enregistrement Grist.
+   Grist peut casser la casse ou ajouter des préfixes selon le nom réel de la colonne. */
+function findField(rec, candidates){
+  for(var i=0;i<candidates.length;i++){
+    if(rec[candidates[i]]!==undefined && rec[candidates[i]]!==null && rec[candidates[i]]!=='')
+      return rec[candidates[i]];
+  }
+  return '';
+}
+
+/* GRIST */
+function initGrist(){
+  if(typeof grist==='undefined') return;
+  gristMode=true;
+  document.getElementById('gristNotice').style.display='inline';
+
+  /* Capturer le docId depuis l'URL de la page parente */
+  var ref=document.referrer||'';
+  var mDoc=ref.match(/\/doc\/([a-zA-Z0-9_-]+)/)||ref.match(/[?&]doc=([a-zA-Z0-9_-]+)/);
+  if(mDoc) window._gristDocId=mDoc[1];
+  /* Aussi tenter depuis l'URL de l'iframe elle-même */
+  var mHref=window.location.href.match(/[?&]dw=([^&]+)/)||window.location.href.match(/\/dw\/([^/]+)/);
+  /* L'URL du document Grist est dans le referrer sous forme /doc/DOCID */
+  console.log('[GEDCOM widget] referrer:', document.referrer, '→ docId détecté:', window._gristDocId);
+
+  grist.ready({requiredAccess:'read table',columns:[
+    {name:'gedcom_content', title:'Contenu GEDCOM (texte)',           type:'Text',      optional:true},
+    {name:'gedcom_file',    title:'Fichier GEDCOM (.ged en pi\u00e8ce jointe)',type:'Attachments',optional:true},
+    {name:'gedcom_start_id',title:'Individu par d\u00e9faut (ID ou nom)',    type:'Text',      optional:true}
+  ]});
+
+  grist.onRecords(function(records){
+    if(!records||!records.length) return;
+    var rec=records[0];
+    var allKeys=Object.keys(rec);
+
+    /* Log complet */
+    console.log('[GEDCOM widget] record keys:', allKeys);
+    console.log('[GEDCOM widget] record:', rec);
+
+    /* Référence individu par défaut */
+    gristPendingStartRef = findField(rec,
+      ['gedcom_start_id','Gedcom_start_id','GEDCOM_start_id','start_id','individu_defaut','individu','default_person']
+    ).toString().trim();
+
+    /* 1. Contenu texte direct */
+    var raw = findField(rec,
+      ['gedcom_content','Gedcom_content','GEDCOM_content','content','contenu','gedcom','texte']
+    );
+    if(raw && typeof raw==='string' && raw.trim() && raw.includes('0 HEAD')){
+      loadGedcomText(raw);
+      return;
+    }
+
+    /* 2. Chercher une pièce jointe dans TOUTES les colonnes sans exception.
+       Grist encode les Attachments sous forme ["L", id1, id2, ...] ou [id1, id2, ...]
+       On cherche tout tableau non vide contenant au moins un entier. */
+    var attachVal = null;
+    var attachColName = null;
+    allKeys.forEach(function(k){
+      if(attachVal) return;
+      var v = rec[k];
+      if(!v) return;
+      /* Tableau avec au moins un élément */
+      if(Array.isArray(v) && v.length > 0){
+        var nums = v.filter(function(x){ return typeof x==='number' && x>0; });
+        if(nums.length > 0){ attachVal=v; attachColName=k; }
+      }
+    });
+
+    console.log('[GEDCOM widget] attachement trouvé dans colonne:', attachColName, '=', attachVal);
+
+    if(attachVal){
+      loadGedcomAttachment(attachVal);
+      return;
+    }
+
+    /* Aucune pièce jointe trouvée — afficher diagnostic détaillé */
+    var diagRows = allKeys.map(function(k){
+      var v=rec[k];
+      var type=typeof v;
+      if(Array.isArray(v)) type='array('+v.length+')';
+      var preview=JSON.stringify(v);
+      if(preview&&preview.length>60) preview=preview.slice(0,60)+'…';
+      return '<tr><td style="padding:3px 8px;font-family:monospace;color:var(--accent)">'+escHtml(k)+'</td><td style="padding:3px 8px;color:var(--txt2)">'+type+'</td><td style="padding:3px 8px;color:var(--txt3)">'+escHtml(preview||'')+'</td></tr>';
+    }).join('');
+
+    document.getElementById('panelTree').innerHTML=
+      '<div style="padding:1rem">'+
+      '<div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:8px">Fichier GEDCOM introuvable</div>'+
+      '<div style="font-size:12px;color:var(--txt2);margin-bottom:12px">Aucune colonne de type Pièces jointes avec des données n\'a été trouvée. Voici les colonnes reçues :</div>'+
+      '<table style="font-size:12px;border-collapse:collapse;width:100%">'+
+      '<thead><tr style="border-bottom:.5px solid var(--border2)">'+
+      '<th style="text-align:left;padding:3px 8px;color:var(--txt2)">Colonne</th>'+
+      '<th style="text-align:left;padding:3px 8px;color:var(--txt2)">Type JS</th>'+
+      '<th style="text-align:left;padding:3px 8px;color:var(--txt2)">Valeur</th>'+
+      '</tr></thead><tbody>'+diagRows+'</tbody></table>'+
+      '<div style="font-size:11px;color:var(--txt3);margin-top:12px">Si votre colonne pièce jointe apparaît avec type "array(0)", le fichier n\'a pas encore été joint à cette ligne.</div>'+
+      '</div>';
+  });
+
+  /* onRecord se déclenche à la sélection de ligne — on re-résout l'individu */
+  grist.onRecord(function(record){
+    if(!record) return;
+    console.log('[GEDCOM widget] onRecord keys:', Object.keys(record));
+    var ref = findField(record,
+      ['gedcom_start_id','Gedcom_start_id','GEDCOM_start_id','start_id','individu_defaut','individu','default_person','gedcom_id']
+    ).toString().trim();
+    if(!ref) return;
+    var id=resolveStartId(ref);
+    if(id){treeRootId=id;selectedId=id;treeNeedCenter=true;if(activeTab==='tree'){drawTree();showSidebar(id);}}
+  });
+}
+
+/* Charger depuis texte brut ou base64 */
+function loadGedcomText(raw){
+  var content=raw;
+  /* Détecter base64 : pas de saut de ligne ET pas d'en-tête GEDCOM */
+  if(!content.includes('\n')&&!content.includes('0 HEAD')){
+    try{content=atob(content);}catch(e){}
+  }
+  parseGedcom(content);
+  document.getElementById('fileName').textContent='Grist';
+  initData(); renderApp();
+}
+
+/* Charger depuis une pièce jointe Grist
+   Grist encode les pièces jointes sous plusieurs formes possibles selon la version :
+   - tableau JS  : [1, 2, …]
+   - format "L"  : ["L", 1, 2, …]  (format sérialisé interne Grist)
+   - entier seul : 3
+   - chaîne      : "3"
+   On extrait le premier ID numérique trouvé. */
+function extractAttachIds(val){
+  if(!val && val!==0) return [];
+  /* Tableau direct */
+  if(Array.isArray(val)){
+    /* Format ["L", 1, 2, …] utilisé par le moteur de sérialisation Grist */
+    var items = val[0]==='L' ? val.slice(1) : val;
+    return items.filter(function(x){ return typeof x==='number'; });
+  }
+  /* Entier seul */
+  if(typeof val==='number') return [val];
+  /* Chaîne : essayer de parser */
+  if(typeof val==='string'){
+    var s=val.trim();
+    /* Chaîne d'un seul entier */
+    if(/^\d+$/.test(s)) return [parseInt(s,10)];
+    /* JSON */
+    try{
+      var p=JSON.parse(s);
+      return extractAttachIds(p);
+    }catch(e){}
+  }
+  return [];
+}
+
+function loadGedcomAttachment(attachVal){
+  var ids=extractAttachIds(attachVal);
+  if(!ids.length){ showAttachHelp('Aucun ID de pièce jointe dans : '+JSON.stringify(attachVal)); return; }
+  var attachId=ids[0];
+  showStatus('Chargement du fichier GEDCOM (pièce jointe #'+attachId+')…');
+
+  function onBuffer(buf){
+    var text=new TextDecoder('UTF-8').decode(buf);
+    if(!text.includes('0 HEAD')) text=new TextDecoder('iso-8859-1').decode(buf);
+    if(!text.includes('0 HEAD')){ showAttachHelp('Le fichier reçu ne semble pas être un GEDCOM valide (taille: '+buf.byteLength+' octets).'); return; }
+    parseGedcom(text);
+    document.getElementById('fileName').textContent='Pièce jointe #'+attachId;
+    initData(); renderApp();
+  }
+
+  /* Méthode 1 : grist.getAttachmentData — API moderne */
+  if(typeof grist.getAttachmentData==='function'){
+    grist.getAttachmentData(attachId).then(onBuffer).catch(function(){ tryWithToken(attachId, onBuffer); });
+    return;
+  }
+
+  tryWithToken(attachId, onBuffer);
+}
+
+/* Télécharger via l'API REST Grist avec un access token */
+function tryWithToken(attachId, onBuffer){
+  /* grist.docApi.getAccessToken() renvoie {token, baseUrl} sur Grist récent */
+  var hasAccessToken = grist.docApi && typeof grist.docApi.getAccessToken==='function';
+
+  if(hasAccessToken){
+    grist.docApi.getAccessToken({readOnly:true}).then(function(tokenInfo){
+      /* baseUrl = ex: https://grist.maine-et-loire.fr/api/docs/DOCID */
+      var base = tokenInfo.baseUrl || '';
+      var url  = base+'/attachments/'+attachId+'/download?token='+tokenInfo.token;
+      console.log('[GEDCOM widget] fetch avec token:', url);
+      return fetch(url);
+    }).then(function(r){
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.arrayBuffer();
+    }).then(onBuffer).catch(function(e){
+      tryManualUrl(attachId, onBuffer, 'getAccessToken a échoué: '+e.message);
+    });
+    return;
+  }
+
+  tryManualUrl(attachId, onBuffer, null);
+}
+
+/* Dernier recours : demander l'URL Grist à l'utilisateur */
+function tryManualUrl(attachId, onBuffer, reason){
+  var saved = localStorage.getItem('grist_base_url')||'';
+  var msg = reason ? '<div style="color:#c0392b;font-size:11px;margin-bottom:8px">'+escHtml(reason)+'</div>' : '';
+
+  document.getElementById('panelTree').innerHTML =
+    '<div style="padding:1rem;max-width:500px">'+
+    '<div style="font-size:14px;font-weight:600;margin-bottom:8px">Configuration requise</div>'+
+    msg+
+    '<div style="font-size:12px;color:var(--txt2);margin-bottom:10px">'+
+    'Entrez l\'URL de base de votre instance Grist pour permettre le téléchargement de la pièce jointe.'+
+    '</div>'+
+    '<div style="font-size:11px;color:var(--txt3);margin-bottom:8px">Exemple : <code>https://grist.maine-et-loire.fr</code></div>'+
+    '<div style="display:flex;gap:8px;margin-bottom:8px">'+
+    '<input id="gristUrlInput" type="text" placeholder="https://votre-grist.exemple.fr" value="'+escHtml(saved)+'" style="flex:1;padding:6px 9px;border:.5px solid var(--border2);border-radius:var(--rsm);font-size:12px;background:var(--bg);color:var(--txt)">'+
+    '<button id="gristUrlBtn" class="btn primary">Charger</button>'+
+    '</div>'+
+    '<div id="gristUrlError" style="font-size:11px;color:#c0392b"></div>'+
+    '</div>';
+
+  document.getElementById('gristUrlBtn').addEventListener('click', function(){
+    var baseUrl = document.getElementById('gristUrlInput').value.trim().replace(/\/+$/,'');
+    if(!baseUrl){ document.getElementById('gristUrlError').textContent='Veuillez entrer une URL.'; return; }
+
+    /* Stocker pour la prochaine fois */
+    try{ localStorage.setItem('grist_base_url', baseUrl); }catch(e){}
+    window._gristBaseUrl = baseUrl;
+
+    /* Récupérer le docId depuis les messages postMessage capturés */
+    var docId = window._gristDocId;
+    if(!docId){ document.getElementById('gristUrlError').textContent='DocId introuvable. Rechargez la page et réessayez.'; return; }
+
+    var url = baseUrl+'/api/docs/'+docId+'/attachments/'+attachId+'/download';
+    console.log('[GEDCOM widget] Téléchargement manuel:', url);
+    showStatus('Téléchargement en cours…');
+
+    fetch(url, {credentials:'include'})
+      .then(function(r){
+        if(!r.ok) throw new Error('HTTP '+r.status+' — vérifiez que vous êtes connecté à Grist dans un autre onglet.');
+        return r.arrayBuffer();
+      })
+      .then(onBuffer)
+      .catch(function(e){
+        showAttachHelp('Échec : '+e.message+'\nURL tentée : '+url);
+      });
+  });
+}
+
+/* Intercepter les messages postMessage de Grist pour capturer le docId */
+window.addEventListener('message', function(e){
+  try{
+    var d = typeof e.data==='string' ? JSON.parse(e.data) : e.data;
+    if(!d) return;
+    /* Format RPC : {method:'openDoc', args:['DOCID12345678', ...]} */
+    if(d.method==='openDoc' && d.args && typeof d.args[0]==='string'){
+      window._gristDocId = d.args[0];
+      console.log('[GEDCOM widget] docId capturé via postMessage:', window._gristDocId);
+    }
+    /* Format réponse fetchTable */
+    if(d.args && Array.isArray(d.args)){
+      d.args.forEach(function(a){
+        if(typeof a==='string' && a.length>=12 && a.length<=16 && /^[a-zA-Z0-9_-]+$/.test(a)){
+          window._gristDocId = a;
+        }
+      });
+    }
+    if(d.docId) window._gristDocId = d.docId;
+  }catch(err){}
+});
+
+function showStatus(msg){
+  document.getElementById('panelTree').innerHTML=
+    '<div style="padding:2rem;text-align:center;font-size:13px;color:var(--txt2)">'+escHtml(msg)+'</div>';
+}
+
+function showAttachHelp(detail){
+  var extra = detail ? '<div style="margin-top:8px;font-size:11px;font-family:monospace;background:var(--bg3);padding:8px;border-radius:6px;word-break:break-all;color:var(--txt2);white-space:pre-wrap">'+escHtml(detail)+'</div>' : '';
+  document.getElementById('panelTree').innerHTML=
+    '<div style="padding:1rem">'+
+    '<div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:6px">Impossible de charger le fichier GEDCOM</div>'+
+    extra+
+    '<div style="font-size:12px;color:var(--txt2);margin-top:10px">Utilisez le bouton <strong>Ouvrir .ged</strong> en haut pour charger le fichier manuellement.</div>'+
+    '</div>';
+}
+
+function resolveStartId(ref){
+  if(!ref) return null;
+  /* ID direct avec ou sans @ */
+  var clean=ref.replace(/^@|@$/g,'');
+  if(gedData.individuals[ref])   return ref;
+  if(gedData.individuals[clean]) return clean;
+  /* Recherche par nom (insensible à la casse, correspondance partielle) */
+  var low=clean.toLowerCase();
+  return Object.keys(gedData.individuals).find(function(id){
+    var p=gedData.individuals[id];
+    return (p.name||'').toLowerCase().includes(low)||
+           (p.surname||'').toLowerCase()===low||
+           (p.given||'').toLowerCase()===low;
+  })||null;
+}
+
+function initData(){
+  filteredIds=Object.keys(gedData.individuals);
+  /* Résoudre l'individu par défaut maintenant que le GEDCOM est parsé */
+  gristDefaultId=resolveStartId(gristPendingStartRef);
+  if(gristDefaultId){treeRootId=gristDefaultId;selectedId=gristDefaultId;}
+  else if(!treeRootId||!gedData.individuals[treeRootId]){treeRootId=filteredIds[0]||null;}
+  treeNeedCenter=true;
+}
+
+/* FILE INPUT */
+document.getElementById('fileInput').addEventListener('change',function(e){
+  var f=e.target.files[0]; if(!f) return;
+  document.getElementById('fileName').textContent=f.name;
+  var r=new FileReader();
+  r.onload=function(ev){parseGedcom(ev.target.result);initData();renderApp();};
+  r.readAsText(f,'UTF-8');
+});
+
+/* PARSER */
+function parseGedcom(text){
+  gedData={individuals:{},families:{},sources:{}};
+  var lines=text.split(/\r?\n/),cur=null,curType=null,curSub=null;
+  for(var i=0;i<lines.length;i++){
+    var m=lines[i].match(/^(\d+)\s+(?:@([^@]+)@\s+)?(\S+)(.*)?$/);
+    if(!m) continue;
+    var lvl=parseInt(m[1]),id=m[2]||null,tag=m[3],val=(m[4]||'').trim();
+    if(lvl===0){
+      curSub=null;
+      if(id&&tag==='INDI'){cur={id:id,name:'',given:'',surname:'',sex:'U',birth:{},death:{},fams:[],famc:[],notes:[],occup:''};gedData.individuals[id]=cur;curType='INDI';}
+      else if(id&&tag==='FAM'){cur={id:id,husb:null,wife:null,chil:[],marr:{}};gedData.families[id]=cur;curType='FAM';}
+      else if(id&&tag==='SOUR'){cur={id:id,title:val,auth:'',publ:''};gedData.sources[id]=cur;curType='SOUR';}
+      else{cur=null;curType=null;}
+      continue;
+    }
+    if(!cur) continue;
+    var ref=val.replace(/^@([^@]+)@$/,'$1');
+    if(curType==='INDI'){
+      if(lvl===1){
+        curSub=tag;
+        if(tag==='NAME') cur.name=val.replace(/\//g,'').replace(/\s+/g,' ').trim();
+        else if(tag==='SEX')  cur.sex=val;
+        else if(tag==='FAMS') cur.fams.push(ref);
+        else if(tag==='FAMC') cur.famc.push(ref);
+        else if(tag==='NOTE') cur.notes.push(val);
+        else if(tag==='OCCU') cur.occup=val;
+      }else if(lvl===2){
+        if(curSub==='BIRT'){if(tag==='DATE')cur.birth.date=val;if(tag==='PLAC')cur.birth.place=val;}
+        if(curSub==='DEAT'){if(tag==='DATE')cur.death.date=val;if(tag==='PLAC')cur.death.place=val;}
+        if(curSub==='NAME'){if(tag==='GIVN')cur.given=val;if(tag==='SURN')cur.surname=val;}
+        if(curSub==='NOTE') cur.notes[cur.notes.length-1]+=' '+val;
+        if(curSub==='OCCU'&&tag==='TYPE') cur.occup+=' ('+val+')';
+      }
+    }else if(curType==='FAM'){
+      if(lvl===1){curSub=tag;if(tag==='HUSB')cur.husb=ref;if(tag==='WIFE')cur.wife=ref;if(tag==='CHIL')cur.chil.push(ref);}
+      else if(lvl===2&&curSub==='MARR'){if(tag==='DATE')cur.marr.date=val;if(tag==='PLAC')cur.marr.place=val;}
+    }else if(curType==='SOUR'){
+      if(tag==='TITL')cur.title=val;if(tag==='AUTH')cur.auth=val;if(tag==='PUBL')cur.publ=val;
+    }
+  }
+  Object.values(gedData.individuals).forEach(function(p){
+    if(!p.surname&&p.name){
+      var pts=p.name.trim().split(/\s+/);
+      if(pts.length>1){p.surname=pts[pts.length-1];p.given=pts.slice(0,-1).join(' ');}
+      else{p.surname=p.name;p.given='';}
+    }
+  });
+}
+
+/* HELPERS */
+function initials(p){return((p.given||p.name||'').trim()[0]||'').toUpperCase()+((p.surname||'').trim()[0]||'').toUpperCase()||'?';}
+function avClass(s){return s==='M'?'av-m':s==='F'?'av-f':'av-u';}
+function badgeClass(s){return s==='M'?'badge-m':s==='F'?'badge-f':'badge-u';}
+function sexLabel(s){return s==='M'?'Homme':s==='F'?'Femme':'Inconnu';}
+var MOIS={JAN:'jan.',FEB:'f\u00e9v.',MAR:'mar.',APR:'avr.',MAY:'mai',JUN:'juin',JUL:'jul.',AUG:'ao\u00fb.',SEP:'sep.',OCT:'oct.',NOV:'nov.',DEC:'d\u00e9c.'};
+function frDate(s){if(!s)return '';return s.replace(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/gi,function(m){return MOIS[m.toUpperCase()]||m;});}
+function fmtDates(p){var b=frDate((p.birth&&p.birth.date)||''),d=frDate((p.death&&p.death.date)||'');if(b&&d)return b+' \u2013 '+d;if(b)return 'n\u00e9(e) '+b;if(d)return '\u2020 '+d;return '';}
+function escHtml(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function emptyHtml(t,s){return '<div class="empty"><div class="empty-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="7" r="3"/><path d="M6 21v-1a6 6 0 0112 0v1"/><circle cx="4" cy="11" r="2"/><path d="M2 21v-1a4 4 0 014-4"/><circle cx="20" cy="11" r="2"/><path d="M22 21v-1a4 4 0 00-4-4"/></svg></div><div class="empty-title">'+t+'</div><div class="empty-sub">'+s+'</div></div>';}
+
+/* TABS */
+document.querySelectorAll('.tab').forEach(function(btn){btn.addEventListener('click',function(){switchTab(btn.dataset.tab);});});
+function switchTab(t){
+  activeTab=t;
+  document.querySelectorAll('.tab').forEach(function(b){b.classList.toggle('active',b.dataset.tab===t);});
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});
+  document.getElementById('panel'+t.charAt(0).toUpperCase()+t.slice(1)).classList.add('active');
+  if(t==='tree')     renderTree();
+  if(t==='list')     renderList();
+  if(t==='families') renderFamilies();
+}
+function renderApp(){switchTab(activeTab);}
+
+/* LIST */
+function applyFilters(){
+  filteredIds=Object.keys(gedData.individuals).filter(function(id){
+    var p=gedData.individuals[id];
+    if(searchNom    &&(p.surname||'').toLowerCase().indexOf(searchNom.toLowerCase())   ===-1) return false;
+    if(searchPrenom &&(p.given||'').toLowerCase().indexOf(searchPrenom.toLowerCase())  ===-1) return false;
+    if(filterSex2   &&p.sex!==filterSex2) return false;
+    return true;
+  });
+  filteredIds.sort(function(a,b){var pa=gedData.individuals[a],pb=gedData.individuals[b];var c=(pa.surname||'').localeCompare(pb.surname||'');return c!==0?c:(pa.given||'').localeCompare(pb.given||'');});
+}
+function renderList(){
+  var el=document.getElementById('panelList'); if(!el) return;
+  if(!Object.keys(gedData.individuals).length){el.innerHTML=emptyHtml('Aucune donn\u00e9e','Ouvrez un fichier .ged ou connectez Grist.');return;}
+  applyFilters();
+  var total=filteredIds.length,slice=filteredIds.slice(currentPage*PAGE,(currentPage+1)*PAGE);
+  var nI=Object.keys(gedData.individuals).length,nF=Object.keys(gedData.families).length;
+  var nS=new Set(Object.values(gedData.individuals).map(function(p){return p.surname;}).filter(Boolean)).size;
+  var nSrc=Object.keys(gedData.sources).length;
+  el.innerHTML=
+    '<div class="stats">'+
+    '<div class="stat"><div class="stat-label">Individus</div><div class="stat-val">'+nI+'</div></div>'+
+    '<div class="stat"><div class="stat-label">Familles</div><div class="stat-val">'+nF+'</div></div>'+
+    '<div class="stat"><div class="stat-label">Patronymes</div><div class="stat-val">'+nS+'</div></div>'+
+    '<div class="stat"><div class="stat-label">Sources</div><div class="stat-val">'+nSrc+'</div></div>'+
+    '</div>'+
+    '<div class="search-row">'+
+    '<input id="inpNom"    type="text" placeholder="Nom de famille\u2026" value="'+escHtml(searchNom)+'" style="flex:1">'+
+    '<input id="inpPrenom" type="text" placeholder="Pr\u00e9nom\u2026" value="'+escHtml(searchPrenom)+'" style="flex:1">'+
+    '<select id="sexSel2"><option value="">Tous</option><option value="M"'+(filterSex2==='M'?' selected':'')+'>H</option><option value="F"'+(filterSex2==='F'?' selected':'')+'>F</option></select>'+
+    '</div>'+
+    '<div style="overflow-x:auto;flex:1"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Helvetica Neue,Arial,sans-serif">'+
+    '<thead><tr style="border-bottom:.5px solid var(--border2)">'+
+    ['Nom','Pr\u00e9nom','Naissance','Lieu'].map(function(h){return '<th style="text-align:left;padding:5px 8px;font-weight:500;color:var(--txt2);font-size:10px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:var(--bg)">'+h+'</th>';}).join('')+
+    '</tr></thead><tbody id="indTbody"></tbody></table></div>'+
+    '<div class="pager"><button id="btnPrev"'+(currentPage===0?' disabled':'')+'>&#8592; Pr\u00e9c.</button>'+
+    '<span>'+Math.min(currentPage*PAGE+1,total)+'\u2013'+Math.min((currentPage+1)*PAGE,total)+' / '+total+'</span>'+
+    '<button id="btnNext"'+((currentPage+1)*PAGE>=total?' disabled':'')+'>Suiv. &#8594;</button></div>';
+  renderTbody(slice);
+  document.getElementById('inpNom').addEventListener('input',function(e){searchNom=e.target.value;currentPage=0;applyFilters();renderTbody(filteredIds.slice(0,PAGE));updatePager();});
+  document.getElementById('inpPrenom').addEventListener('input',function(e){searchPrenom=e.target.value;currentPage=0;applyFilters();renderTbody(filteredIds.slice(0,PAGE));updatePager();});
+  document.getElementById('sexSel2').addEventListener('change',function(e){filterSex2=e.target.value;currentPage=0;applyFilters();renderTbody(filteredIds.slice(0,PAGE));updatePager();});
+  document.getElementById('btnPrev').addEventListener('click',function(){currentPage--;renderList();});
+  document.getElementById('btnNext').addEventListener('click',function(){currentPage++;renderList();});
+}
+function renderTbody(ids){
+  var tb=document.getElementById('indTbody'); if(!tb) return;
+  var h='';
+  ids.forEach(function(id){
+    var p=gedData.individuals[id],isr=(id===treeRootId);
+    h+='<tr data-id="'+id+'" style="cursor:pointer;border-bottom:.5px solid var(--border);'+(isr?'background:var(--accent-bg)':'')+'">' +
+      '<td style="padding:6px 8px;font-weight:600;color:var(--txt)">'+escHtml(p.surname||p.name||'\u2014')+'</td>'+
+      '<td style="padding:6px 8px;color:var(--txt)">'+escHtml(p.given||'\u2014')+'</td>'+
+      '<td style="padding:6px 8px;color:var(--txt2)">'+escHtml(frDate((p.birth&&p.birth.date)||''))+'</td>'+
+      '<td style="padding:6px 8px;color:var(--txt3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml((p.birth&&p.birth.place)||'')+'</td>'+
+      '</tr>';
+  });
+  tb.innerHTML=h;
+  tb.querySelectorAll('tr[data-id]').forEach(function(tr){
+    tr.addEventListener('mouseenter',function(){if(tr.dataset.id!==treeRootId)tr.style.background='var(--bg2)';});
+    tr.addEventListener('mouseleave',function(){tr.style.background=tr.dataset.id===treeRootId?'var(--accent-bg)':'';});
+    tr.addEventListener('click',function(){selectPerson(tr.dataset.id);});
+  });
+}
+function updatePager(){
+  var total=filteredIds.length,p=document.getElementById('btnPrev'),n=document.getElementById('btnNext');
+  if(p)p.disabled=currentPage===0;if(n)n.disabled=(currentPage+1)*PAGE>=total;
+  var s=document.querySelector('.pager span');
+  if(s)s.textContent=Math.min(currentPage*PAGE+1,total)+'\u2013'+Math.min((currentPage+1)*PAGE,total)+' / '+total;
+}
+
+/* FAMILIES */
+function renderFamilies(){
+  var el=document.getElementById('panelFamilies'); if(!el) return;
+  var fids=Object.keys(gedData.families);
+  if(!fids.length){el.innerHTML=emptyHtml('Aucune famille','Chargez un fichier GEDCOM.');return;}
+  var html='<div style="font-size:11px;color:var(--txt2);margin-bottom:10px">'+fids.length+' famille(s)</div>';
+  fids.forEach(function(fid){
+    var fam=gedData.families[fid],h=fam.husb?gedData.individuals[fam.husb]:null,w=fam.wife?gedData.individuals[fam.wife]:null;
+    html+='<div class="fam-card"><div class="fam-title">'+
+      (h?'<span class="link" data-id="'+fam.husb+'">'+escHtml(h.name)+'</span>':'')+
+      (h&&w?' &times; ':'')+
+      (w?'<span class="link" data-id="'+fam.wife+'">'+escHtml(w.name)+'</span>':'')+
+      '</div>'+
+      (fam.marr&&(fam.marr.date||fam.marr.place)?'<div class="fam-sub">Mariage : '+escHtml([frDate(fam.marr.date||''),fam.marr.place||''].filter(Boolean).join(' \u2013 '))+'</div>':'')+
+      (fam.chil.length?'<div class="fam-sub" style="margin-top:4px">'+fam.chil.length+' enfant(s) : '+fam.chil.map(function(cid){var c=gedData.individuals[cid];return c?'<span class="link" data-id="'+cid+'">'+escHtml(c.name)+'</span>':cid;}).join(', ')+'</div>':'')+
+      '</div>';
+  });
+  el.innerHTML=html;
+  el.querySelectorAll('.link[data-id]').forEach(function(lnk){lnk.addEventListener('click',function(){selectPerson(lnk.dataset.id);});});
+}
+
+/* DETAIL HTML */
+function buildDetailHtml(pid){
+  var p=gedData.individuals[pid]; if(!p) return '';
+  var fams=gedData.families,pr='',uh='';
+  p.famc.forEach(function(fid){
+    var fam=fams[fid]; if(!fam) return;
+    if(fam.husb&&gedData.individuals[fam.husb]) pr+='<div class="detail-row"><span class="dk">P\u00e8re</span><span class="dv"><span class="link" data-id="'+fam.husb+'">'+escHtml(gedData.individuals[fam.husb].name)+'</span></span></div>';
+    if(fam.wife&&gedData.individuals[fam.wife]) pr+='<div class="detail-row"><span class="dk">M\u00e8re</span><span class="dv"><span class="link" data-id="'+fam.wife+'">'+escHtml(gedData.individuals[fam.wife].name)+'</span></span></div>';
+  });
+  p.fams.forEach(function(fid){
+    var fam=fams[fid]; if(!fam) return;
+    var spId=fam.husb===pid?fam.wife:fam.husb,sp=spId?gedData.individuals[spId]:null,ch='';
+    if(fam.chil.length) ch='<div style="margin-top:6px"><div class="fam-sub" style="margin-bottom:3px">Enfants :</div>'+fam.chil.map(function(cid){var c=gedData.individuals[cid];return c?'<div class="fam-sub"><span class="link" data-id="'+cid+'">'+escHtml(c.name)+'</span></div>':'';}).join('')+'</div>';
+    uh+='<div class="fam-card"><div class="fam-title">'+(sp?'<span class="link" data-id="'+spId+'">'+escHtml(sp.name)+'</span>':'Conjoint inconnu')+(fam.marr&&fam.marr.date?' \u00b7 <span style="font-weight:400">'+escHtml(frDate(fam.marr.date))+'</span>':'')+'</div>'+(fam.marr&&fam.marr.place?'<div class="fam-sub">'+escHtml(fam.marr.place)+'</div>':'')+ch+'</div>';
+  });
+  var bS=escHtml([frDate((p.birth&&p.birth.date)||''),(p.birth&&p.birth.place)||''].filter(Boolean).join(' \u2013 '))||'\u2014';
+  var dS=escHtml([frDate((p.death&&p.death.date)||''),(p.death&&p.death.place)||''].filter(Boolean).join(' \u2013 '))||'\u2014';
+  return '<button class="close-btn" id="btnCloseSidebar">&times;</button>'+
+    '<div class="detail-header"><div class="detail-avatar '+avClass(p.sex)+'">'+initials(p)+'</div>'+
+    '<div style="flex:1"><div class="detail-name">'+escHtml(p.name||'Sans nom')+'</div>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap"><span class="badge '+badgeClass(p.sex)+'">'+sexLabel(p.sex)+'</span>'+(p.occup?'<span style="font-size:11px;color:var(--txt2)">'+escHtml(p.occup)+'</span>':'')+'</div></div></div>'+
+    '<div style="display:flex;gap:6px;margin-bottom:10px"><button class="btn" id="btnPinRoot" style="flex:1;justify-content:center">\u25b6 Centrer l\'arbre</button></div>'+
+    '<div class="detail-box"><div class="detail-box-title">\u00c9tat civil</div>'+
+    '<div class="detail-row"><span class="dk">Naissance</span><span class="dv">'+bS+'</span></div>'+
+    '<div class="detail-row"><span class="dk">D\u00e9c\u00e8s</span><span class="dv">'+dS+'</span></div>'+
+    pr+'<div class="detail-row"><span class="dk">R\u00e9f. GEDCOM</span><span class="dv" style="font-family:monospace;font-size:10px;color:var(--txt2)">'+escHtml(pid)+'</span></div></div>'+
+    (uh?'<div><div class="sec-title">Unions &amp; descendance</div>'+uh+'</div>':'')+
+    (p.notes&&p.notes.filter(Boolean).length?'<div class="detail-box" style="margin-top:8px"><div class="detail-box-title">Notes</div><div style="font-size:12px;color:var(--txt2);line-height:1.5">'+escHtml(p.notes.join(' '))+'</div></div>':'');
+}
+function bindSidebar(el,pid){
+  el.querySelectorAll('.link[data-id]').forEach(function(lnk){lnk.addEventListener('click',function(){selectPerson(lnk.dataset.id);});});
+  var pin=document.getElementById('btnPinRoot');
+  if(pin) pin.addEventListener('click',function(){treeRootId=pid;treeNeedCenter=true;drawTree();});
+  var close=document.getElementById('btnCloseSidebar');
+  if(close) close.addEventListener('click',function(){var sb=document.getElementById('treeSidebar');if(sb)sb.style.display='none';});
+}
+function showSidebar(pid){
+  selectedId=pid;
+  var sb=document.getElementById('treeSidebar'); if(!sb) return;
+  sb.innerHTML=buildDetailHtml(pid);
+  sb.style.display='block';
+  bindSidebar(sb,pid);
+}
+
+/* SELECT */
+function selectPerson(id){
+  selectedId=id;treeRootId=id;treeNeedCenter=true;
+  if(activeTab==='tree'){drawTree();showSidebar(id);}
+  else switchTab('tree');
+}
+
+/* TREE */
+var treeZoom=1.0,treePanX=0,treePanY=0,treeNeedCenter=true,treeOrientation='V';
+
+function renderTree(){
+  var el=document.getElementById('panelTree'); if(!el) return;
+  el.innerHTML=
+    '<div class="tree-controls">'+
+    '<span id="treeLabel" style="font-size:12px;color:var(--txt2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>'+
+    '<button class="btn" id="btnOrient">'+(treeOrientation==='H'?'Vertical':'Horizontal')+'</button>'+
+    '<button class="btn" id="btnZoomIn">+</button>'+
+    '<button class="btn" id="btnZoomOut">&#8722;</button>'+
+    '<button class="btn" id="btnZoomFit">Centrer</button>'+
+    '<span id="zoomLabel" style="font-size:12px;color:var(--txt2);min-width:36px;text-align:right"></span>'+
+    '</div>'+
+    '<div id="treeContainer">'+
+    '<div id="treeViewport"><canvas id="treeCanvas"></canvas></div>'+
+    '<div id="treeSidebar"></div>'+
+    '</div>';
+
+  if(!treeRootId||!gedData.individuals[treeRootId]){
+    document.getElementById('treeViewport').innerHTML='<div style="padding:3rem;text-align:center;font-size:13px;color:var(--txt2)">S\u00e9lectionnez un individu dans la liste ou ouvrez un fichier GEDCOM.</div>';
+    return;
+  }
+  document.getElementById('btnOrient').addEventListener('click',function(){treeOrientation=treeOrientation==='H'?'V':'H';document.getElementById('btnOrient').textContent=treeOrientation==='H'?'Vertical':'Horizontal';treeNeedCenter=true;drawTree();});
+  document.getElementById('btnZoomIn').addEventListener('click',function(){treeZoom=Math.min(2.5,treeZoom*1.2);drawTree();});
+  document.getElementById('btnZoomOut').addEventListener('click',function(){treeZoom=Math.max(0.2,treeZoom/1.2);drawTree();});
+  document.getElementById('btnZoomFit').addEventListener('click',function(){treeNeedCenter=true;drawTree();});
+  setupDrag(); setupTreeClick(); treeNeedCenter=true; drawTree();
+  showSidebar(treeRootId);
+}
+
+function setupDrag(){
+  var vp=document.getElementById('treeViewport'); if(!vp) return;
+  var drag=false,sx=0,sy=0,ox=0,oy=0;
+  vp.addEventListener('mousedown',function(e){if(e.button!==0)return;drag=true;sx=e.clientX;sy=e.clientY;ox=treePanX;oy=treePanY;vp.style.cursor='grabbing';});
+  window.addEventListener('mousemove',function(e){if(!drag)return;treePanX=ox+e.clientX-sx;treePanY=oy+e.clientY-sy;drawTree();});
+  window.addEventListener('mouseup',function(){drag=false;var v=document.getElementById('treeViewport');if(v)v.style.cursor='grab';});
+  vp.addEventListener('touchstart',function(e){if(e.touches.length!==1)return;sx=e.touches[0].clientX;sy=e.touches[0].clientY;ox=treePanX;oy=treePanY;drag=true;},{passive:true});
+  vp.addEventListener('touchmove', function(e){if(!drag||e.touches.length!==1)return;treePanX=ox+e.touches[0].clientX-sx;treePanY=oy+e.touches[0].clientY-sy;drawTree();},{passive:true});
+  vp.addEventListener('touchend',  function(){drag=false;});
+  vp.addEventListener('wheel',function(e){e.preventDefault();treeZoom=Math.max(0.2,Math.min(2.5,treeZoom*(e.deltaY>0?0.9:1.1)));drawTree();},{passive:false});
+}
+
+function computeLayout(rootId){
+  var NW=154,NH=62,GX=38,GY=14,nodeMap={},edges=[];
+  function addAnc(id,gen,slot,depth){
+    if(depth>5||!id||nodeMap[id])return;
+    var ind=gedData.individuals[id]; if(!ind)return;
+    nodeMap[id]={id:id,ind:ind,gen:gen,slot:slot};
+    ind.famc.forEach(function(fid){
+      var fam=gedData.families[fid]; if(!fam)return;
+      var half=Math.pow(2,depth-1)*0.5;
+      if(fam.husb&&!nodeMap[fam.husb]){edges.push({from:id,to:fam.husb,type:'parent'});addAnc(fam.husb,gen-1,slot-half,depth+1);}
+      if(fam.wife&&!nodeMap[fam.wife]){edges.push({from:id,to:fam.wife,type:'parent'});addAnc(fam.wife,gen-1,slot+half,depth+1);}
+    });
+  }
+  addAnc(rootId,0,0,1);
+  var proband=gedData.individuals[rootId];
+  if(proband){
+    var cs=0;
+    proband.fams.forEach(function(fid){
+      var fam=gedData.families[fid]; if(!fam)return;
+      var spId=fam.husb===rootId?fam.wife:fam.husb;
+      if(spId&&!nodeMap[spId]){var si=gedData.individuals[spId];if(si){nodeMap[spId]={id:spId,ind:si,gen:0,slot:1,isSpouse:true};edges.push({from:rootId,to:spId,type:'spouse'});}}
+      fam.chil.forEach(function(cid){
+        if(nodeMap[cid])return;
+        var ci=gedData.individuals[cid]; if(!ci)return;
+        nodeMap[cid]={id:cid,ind:ci,gen:1,slot:cs};edges.push({from:rootId,to:cid,type:'child'});cs++;
+      });
+    });
+  }
+  var byGen={};
+  Object.values(nodeMap).forEach(function(n){if(!byGen[n.gen])byGen[n.gen]=[];byGen[n.gen].push(n);});
+  Object.keys(byGen).forEach(function(g){byGen[g].sort(function(a,b){return a.slot-b.slot;});byGen[g].forEach(function(n,i){n.slot=i;});});
+  function ctrP(id){
+    var n=nodeMap[id]; if(!n)return;
+    n.ind.famc.forEach(function(fid){
+      var fam=gedData.families[fid]; if(!fam)return;
+      var fn=fam.husb?nodeMap[fam.husb]:null,mn=fam.wife?nodeMap[fam.wife]:null;
+      if(fn&&mn){fn.slot=n.slot-0.5;mn.slot=n.slot+0.5;ctrP(fam.husb);ctrP(fam.wife);}
+      else if(fn){fn.slot=n.slot;ctrP(fam.husb);}
+      else if(mn){mn.slot=n.slot;ctrP(fam.wife);}
+    });
+  }
+  ctrP(rootId);
+  var ch=Object.values(nodeMap).filter(function(n){return n.gen===1&&!n.isSpouse;});
+  if(ch.length){var mid=(ch.length-1)/2;ch.forEach(function(n,i){n.slot=i-mid;});}
+  var all=Object.values(nodeMap),minG=Math.min.apply(null,all.map(function(n){return n.gen;}));
+  all.forEach(function(n){var col=n.gen-minG;n.x=treeOrientation==='H'?col*(NW+GX):n.slot*(NW+GX);n.y=treeOrientation==='H'?n.slot*(NH+GY):col*(NH+GY);});
+  return{nodes:nodeMap,edges:edges,W:NW,H:NH};
+}
+
+function drawTree(){
+  var vp=document.getElementById('treeViewport'),canvas=document.getElementById('treeCanvas');
+  if(!vp||!canvas)return;
+  var DPR=window.devicePixelRatio||1,vpW=vp.clientWidth||800,vpH=vp.clientHeight||440;
+  canvas.width=vpW*DPR;canvas.height=vpH*DPR;canvas.style.width=vpW+'px';canvas.style.height=vpH+'px';
+  var ctx=canvas.getContext('2d');ctx.scale(DPR,DPR);
+  var lay=computeLayout(treeRootId),nm=lay.nodes,edges=lay.edges,NW=lay.W,NH=lay.H;
+  var all=Object.values(nm); if(!all.length)return;
+  if(treeNeedCenter){
+    var xs=all.map(function(n){return n.x;}),ys=all.map(function(n){return n.y;});
+    var minX=Math.min.apply(null,xs),maxX=Math.max.apply(null,xs)+NW,minY=Math.min.apply(null,ys),maxY=Math.max.apply(null,ys)+NH;
+    treePanX=(vpW-(maxX-minX)*treeZoom)/2-minX*treeZoom;treePanY=(vpH-(maxY-minY)*treeZoom)/2-minY*treeZoom;treeNeedCenter=false;
+  }
+  ctx.clearRect(0,0,vpW,vpH);
+  var dk=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  var C={edge:dk?'rgba(255,255,255,.2)':'rgba(0,0,0,.2)',edgeSp:dk?'rgba(127,119,221,.6)':'rgba(74,63,140,.35)',edgeCh:dk?'rgba(29,110,86,.6)':'rgba(29,110,86,.4)',border:dk?'rgba(255,255,255,.14)':'rgba(0,0,0,.16)',accent:dk?'#7f77dd':'#4a3f8c',bg2:dk?'#252420':'#f5f4f0',maleB:dk?'#042c53':'#e6f1fb',maleT:dk?'#b5d4f4':'#0c447c',femB:dk?'#4b1528':'#fbeaf0',femT:dk?'#f4c0d1':'#72243e',spB:dk?'#2e2d28':'#faf9f6',txt2:dk?'#9e9b92':'#6b6860'};
+  function tx(x){return x*treeZoom+treePanX;}function ty(y){return y*treeZoom+treePanY;}function sc(v){return v*treeZoom;}
+  edges.forEach(function(e){
+    var na=nm[e.from],nb=nm[e.to]; if(!na||!nb)return;
+    ctx.beginPath();ctx.strokeStyle=e.type==='spouse'?C.edgeSp:e.type==='child'?C.edgeCh:C.edge;ctx.lineWidth=e.type==='spouse'?Math.max(1,sc(1.5)):Math.max(.8,sc(1));ctx.setLineDash(e.type==='spouse'?[sc(4),sc(3)]:[]);
+    if(e.type==='spouse'){ctx.moveTo(tx(na.x+NW/2),ty(na.y+NH/2));ctx.lineTo(tx(nb.x+NW/2),ty(nb.y+NH/2));}
+    else{var x1,y1,x2,y2,mx,my;
+      if(treeOrientation==='H'){x1=e.type==='parent'?tx(na.x):tx(na.x+NW);y1=ty(na.y+NH/2);x2=e.type==='parent'?tx(nb.x+NW):tx(nb.x);y2=ty(nb.y+NH/2);mx=(x1+x2)/2;ctx.moveTo(x1,y1);ctx.bezierCurveTo(mx,y1,mx,y2,x2,y2);}
+      else{x1=tx(na.x+NW/2);y1=e.type==='parent'?ty(na.y):ty(na.y+NH);x2=tx(nb.x+NW/2);y2=e.type==='parent'?ty(nb.y+NH):ty(nb.y);my=(y1+y2)/2;ctx.moveTo(x1,y1);ctx.bezierCurveTo(x1,my,x2,my,x2,y2);}
+    }
+    ctx.stroke();ctx.setLineDash([]);
+  });
+  var R=Math.max(2,sc(7)),hits=[];
+  all.forEach(function(n){
+    var p=n.ind,nx=tx(n.x),ny=ty(n.y),nw=sc(NW),nh=sc(NH),isRoot=n.id===treeRootId,isSel=n.id===selectedId;
+    var fill=n.isSpouse?C.spB:p.sex==='M'?C.maleB:p.sex==='F'?C.femB:C.bg2,tCol=p.sex==='M'?C.maleT:p.sex==='F'?C.femT:C.txt2;
+    ctx.beginPath();ctx.roundRect(nx,ny,nw,nh,R);ctx.fillStyle=fill;ctx.fill();
+    ctx.strokeStyle=(isSel||isRoot)?C.accent:C.border;ctx.lineWidth=(isSel||isRoot)?Math.max(1.5,sc(1.8)):Math.max(.5,sc(.6));ctx.stroke();
+    if(nw>30){
+      var gv=(p.given||(p.name||'').split(' ').slice(0,-1).join(' ')||p.name||'').slice(0,18);
+      var sn=(p.surname||(p.name||'').split(' ').pop()||'').toUpperCase().slice(0,18);
+      var dt=fmtDates(p).slice(0,26);
+      ctx.textAlign='center';ctx.textBaseline='alphabetic';
+      ctx.font='normal '+Math.max(8,sc(9.5))+'px Georgia,serif';ctx.fillStyle=C.txt2;ctx.fillText(gv,nx+nw/2,ny+sc(16),nw-sc(8));
+      ctx.font='700 '+Math.max(8,sc(10))+'px Helvetica Neue,Arial,sans-serif';ctx.fillStyle=tCol;ctx.fillText(sn,nx+nw/2,ny+sc(29),nw-sc(8));
+      ctx.font='normal '+Math.max(7,sc(8))+'px Helvetica Neue,Arial,sans-serif';ctx.fillStyle=C.txt2;ctx.fillText(dt,nx+nw/2,ny+sc(43),nw-sc(8));
+    }
+    hits.push({id:n.id,nx:nx,ny:ny,nw:nw,nh:nh});
+  });
+  canvas._hits=hits;
+  var lbl=document.getElementById('treeLabel');if(lbl&&gedData.individuals[treeRootId])lbl.textContent=gedData.individuals[treeRootId].name;
+  var zl=document.getElementById('zoomLabel');if(zl)zl.textContent=Math.round(treeZoom*100)+'%';
+}
+
+function setupTreeClick(){
+  var canvas=document.getElementById('treeCanvas'); if(!canvas)return;
+  var moved=false,dx=0,dy=0;
+  canvas.addEventListener('mousedown',function(e){moved=false;dx=e.clientX;dy=e.clientY;});
+  canvas.addEventListener('mousemove',function(e){
+    if(Math.abs(e.clientX-dx)+Math.abs(e.clientY-dy)>4)moved=true;
+    if(!canvas._hits)return;
+    var r=canvas.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
+    canvas.style.cursor=canvas._hits.some(function(h){return cx>=h.nx&&cx<=h.nx+h.nw&&cy>=h.ny&&cy<=h.ny+h.nh;})?'pointer':'grab';
+  });
+  canvas.addEventListener('mouseup',function(e){
+    if(moved)return;
+    var r=canvas.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
+    if(!canvas._hits)return;
+    for(var i=0;i<canvas._hits.length;i++){var h=canvas._hits[i];if(cx>=h.nx&&cx<=h.nx+h.nw&&cy>=h.ny&&cy<=h.ny+h.nh){showSidebar(h.id);selectedId=h.id;drawTree();break;}}
+  });
+  var td=0;
+  canvas.addEventListener('touchstart',function(){td=Date.now();},{passive:true});
+  canvas.addEventListener('touchend',function(e){
+    if(Date.now()-td>300)return;
+    var r=canvas.getBoundingClientRect(),t=e.changedTouches[0],cx=t.clientX-r.left,cy=t.clientY-r.top;
+    if(!canvas._hits)return;
+    for(var i=0;i<canvas._hits.length;i++){var h=canvas._hits[i];if(cx>=h.nx&&cx<=h.nx+h.nw&&cy>=h.ny&&cy<=h.ny+h.nh){showSidebar(h.id);selectedId=h.id;drawTree();break;}}
+  });
+}
+window.addEventListener('resize',function(){if(activeTab==='tree')drawTree();});
+
+/* POLYFILL */
+if(!CanvasRenderingContext2D.prototype.roundRect){
+  CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){var R=Math.min(r,w/2,h/2);this.moveTo(x+R,y);this.lineTo(x+w-R,y);this.arcTo(x+w,y,x+w,y+R,R);this.lineTo(x+w,y+h-R);this.arcTo(x+w,y+h,x+w-R,y+h,R);this.lineTo(x+R,y+h);this.arcTo(x,y+h,x,y+h-R,R);this.lineTo(x,y+R);this.arcTo(x,y,x+R,y,R);this.closePath();};
+}
+
+/* INIT */
+document.getElementById('panelTree').innerHTML=emptyHtml('Aucune donn\u00e9e charg\u00e9e','Ouvrez un fichier .ged Ancestris ou connectez une colonne GEDCOM dans Grist.');
+try{initGrist();}catch(e){}
+</script>
+</body>
+</html>
