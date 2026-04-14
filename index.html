@@ -84,6 +84,14 @@ body{font-family:Georgia,'Times New Roman',serif;background:var(--bg);color:var(
 .empty-ico{width:50px;height:50px;border-radius:50%;background:var(--bg2);display:flex;align-items:center;justify-content:center}
 .empty-title{font-size:15px;font-weight:600;color:var(--txt)}
 .empty-sub{font-size:13px;color:var(--txt2);max-width:300px;font-family:'Helvetica Neue',Arial,sans-serif}
+/* Config panel */
+.config-panel{padding:1.5rem;max-width:480px}
+.config-panel h2{font-size:15px;font-weight:600;margin-bottom:6px;color:var(--txt)}
+.config-panel p{font-size:12px;color:var(--txt2);margin-bottom:12px;font-family:'Helvetica Neue',Arial,sans-serif;line-height:1.6}
+.config-panel label{font-size:11px;color:var(--txt2);display:block;margin-bottom:4px;font-family:'Helvetica Neue',Arial,sans-serif}
+.config-panel input{width:100%;padding:7px 10px;border:.5px solid var(--border2);border-radius:var(--rsm);font-size:12px;background:var(--bg);color:var(--txt);font-family:monospace;margin-bottom:10px}
+.config-panel input:focus{outline:none;border-color:var(--accent)}
+.err{font-size:11px;color:#c0392b;margin-top:4px;font-family:'Helvetica Neue',Arial,sans-serif}
 </style>
 </head>
 <body>
@@ -110,338 +118,158 @@ body{font-family:Georgia,'Times New Roman',serif;background:var(--bg);color:var(
   </div>
 </div>
 <script>
-/* STATE */
+/* ═══════════════════════ STATE ═══════════════════════ */
 var gedData={individuals:{},families:{},sources:{}};
 var selectedId=null,treeRootId=null,currentPage=0,PAGE=30;
 var filteredIds=[],activeTab='tree';
 var searchNom='',searchPrenom='',filterSex2='';
 var gristMode=false,gristDefaultId=null,gristPendingStartRef='';
 
-/* Cherche la première clé correspondante dans un enregistrement Grist.
-   Grist peut casser la casse ou ajouter des préfixes selon le nom réel de la colonne. */
-function findField(rec, candidates){
-  for(var i=0;i<candidates.length;i++){
-    if(rec[candidates[i]]!==undefined && rec[candidates[i]]!==null && rec[candidates[i]]!=='')
-      return rec[candidates[i]];
-  }
-  return '';
-}
-
-/* GRIST */
+/* ═══════════════════════ GRIST ═══════════════════════ */
 function initGrist(){
   if(typeof grist==='undefined') return;
   gristMode=true;
   document.getElementById('gristNotice').style.display='inline';
 
-  /* Capturer le docId depuis l'URL de la page parente */
-  var ref=document.referrer||'';
-  var mDoc=ref.match(/\/doc\/([a-zA-Z0-9_-]+)/)||ref.match(/[?&]doc=([a-zA-Z0-9_-]+)/);
-  if(mDoc) window._gristDocId=mDoc[1];
-  /* Aussi tenter depuis l'URL de l'iframe elle-même */
-  var mHref=window.location.href.match(/[?&]dw=([^&]+)/)||window.location.href.match(/\/dw\/([^/]+)/);
-  /* L'URL du document Grist est dans le referrer sous forme /doc/DOCID */
-  console.log('[GEDCOM widget] referrer:', document.referrer, '→ docId détecté:', window._gristDocId);
-
-  grist.ready({requiredAccess:'read table',columns:[
-    {name:'gedcom_content', title:'Contenu GEDCOM (texte)',           type:'Text',      optional:true},
-    {name:'gedcom_file',    title:'Fichier GEDCOM (.ged en pi\u00e8ce jointe)',type:'Attachments',optional:true},
-    {name:'gedcom_start_id',title:'Individu par d\u00e9faut (ID ou nom)',    type:'Text',      optional:true}
-  ]});
+  grist.ready({
+    requiredAccess:'read table',
+    columns:[
+      {name:'gedcom_content', title:'Contenu GEDCOM (texte)',                  type:'Text',        optional:true},
+      {name:'gedcom_file',    title:'Fichier GEDCOM (.ged, pi\u00e8ce jointe)', type:'Attachments', optional:true},
+      {name:'gedcom_start_id',title:'Individu par d\u00e9faut (ID ou nom)',     type:'Text',        optional:true}
+    ]
+  });
 
   grist.onRecords(function(records){
     if(!records||!records.length) return;
     var rec=records[0];
-    var allKeys=Object.keys(rec);
 
-    /* Log complet */
-    console.log('[GEDCOM widget] record keys:', allKeys);
-    console.log('[GEDCOM widget] record:', rec);
+    /* Individu par défaut */
+    gristPendingStartRef=String(rec.gedcom_start_id||'').trim();
 
-    /* Référence individu par défaut */
-    gristPendingStartRef = findField(rec,
-      ['gedcom_start_id','Gedcom_start_id','GEDCOM_start_id','start_id','individu_defaut','individu','default_person']
-    ).toString().trim();
+    /* 1 — Texte direct */
+    var raw=String(rec.gedcom_content||'').trim();
+    if(raw && raw.includes('0 HEAD')){ loadText(raw); return; }
 
-    /* 1. Contenu texte direct */
-    var raw = findField(rec,
-      ['gedcom_content','Gedcom_content','GEDCOM_content','content','contenu','gedcom','texte']
-    );
-    if(raw && typeof raw==='string' && raw.trim() && raw.includes('0 HEAD')){
-      loadGedcomText(raw);
-      return;
+    /* 2 — Pièce jointe : gedcom_file est un tableau d'IDs entiers */
+    var att=rec.gedcom_file;
+    if(Array.isArray(att) && att.length){
+      var ids=att.filter(function(x){return typeof x==='number'&&x>0;});
+      if(ids.length){ downloadAttachment(ids[0]); return; }
     }
 
-    /* 2. Chercher une pièce jointe dans TOUTES les colonnes sans exception.
-       Grist encode les Attachments sous forme ["L", id1, id2, ...] ou [id1, id2, ...]
-       On cherche tout tableau non vide contenant au moins un entier. */
-    var attachVal = null;
-    var attachColName = null;
-    allKeys.forEach(function(k){
-      if(attachVal) return;
-      var v = rec[k];
-      if(!v) return;
-      /* Tableau avec au moins un élément */
-      if(Array.isArray(v) && v.length > 0){
-        var nums = v.filter(function(x){ return typeof x==='number' && x>0; });
-        if(nums.length > 0){ attachVal=v; attachColName=k; }
-      }
-    });
-
-    console.log('[GEDCOM widget] attachement trouvé dans colonne:', attachColName, '=', attachVal);
-
-    if(attachVal){
-      loadGedcomAttachment(attachVal);
-      return;
-    }
-
-    /* Aucune pièce jointe trouvée — afficher diagnostic détaillé */
-    var diagRows = allKeys.map(function(k){
-      var v=rec[k];
-      var type=typeof v;
-      if(Array.isArray(v)) type='array('+v.length+')';
-      var preview=JSON.stringify(v);
-      if(preview&&preview.length>60) preview=preview.slice(0,60)+'…';
-      return '<tr><td style="padding:3px 8px;font-family:monospace;color:var(--accent)">'+escHtml(k)+'</td><td style="padding:3px 8px;color:var(--txt2)">'+type+'</td><td style="padding:3px 8px;color:var(--txt3)">'+escHtml(preview||'')+'</td></tr>';
-    }).join('');
-
-    document.getElementById('panelTree').innerHTML=
-      '<div style="padding:1rem">'+
-      '<div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:8px">Fichier GEDCOM introuvable</div>'+
-      '<div style="font-size:12px;color:var(--txt2);margin-bottom:12px">Aucune colonne de type Pièces jointes avec des données n\'a été trouvée. Voici les colonnes reçues :</div>'+
-      '<table style="font-size:12px;border-collapse:collapse;width:100%">'+
-      '<thead><tr style="border-bottom:.5px solid var(--border2)">'+
-      '<th style="text-align:left;padding:3px 8px;color:var(--txt2)">Colonne</th>'+
-      '<th style="text-align:left;padding:3px 8px;color:var(--txt2)">Type JS</th>'+
-      '<th style="text-align:left;padding:3px 8px;color:var(--txt2)">Valeur</th>'+
-      '</tr></thead><tbody>'+diagRows+'</tbody></table>'+
-      '<div style="font-size:11px;color:var(--txt3);margin-top:12px">Si votre colonne pièce jointe apparaît avec type "array(0)", le fichier n\'a pas encore été joint à cette ligne.</div>'+
-      '</div>';
+    showEmpty();
   });
 
-  /* onRecord se déclenche à la sélection de ligne — on re-résout l'individu */
   grist.onRecord(function(record){
     if(!record) return;
-    console.log('[GEDCOM widget] onRecord keys:', Object.keys(record));
-    var ref = findField(record,
-      ['gedcom_start_id','Gedcom_start_id','GEDCOM_start_id','start_id','individu_defaut','individu','default_person','gedcom_id']
-    ).toString().trim();
+    var ref=String(record.gedcom_start_id||'').trim();
     if(!ref) return;
-    var id=resolveStartId(ref);
-    if(id){treeRootId=id;selectedId=id;treeNeedCenter=true;if(activeTab==='tree'){drawTree();showSidebar(id);}}
+    var id=resolveId(ref);
+    if(id&&id!==treeRootId){treeRootId=id;selectedId=id;treeNeedCenter=true;if(activeTab==='tree'){drawTree();showSidebar(id);}}
   });
 }
 
-/* Charger depuis texte brut ou base64 */
-function loadGedcomText(raw){
-  var content=raw;
-  /* Détecter base64 : pas de saut de ligne ET pas d'en-tête GEDCOM */
-  if(!content.includes('\n')&&!content.includes('0 HEAD')){
-    try{content=atob(content);}catch(e){}
-  }
-  parseGedcom(content);
-  document.getElementById('fileName').textContent='Grist';
-  initData(); renderApp();
-}
+/* ═══════════════════════ TÉLÉCHARGEMENT PIÈCE JOINTE ═══════════════════════
+   Stratégie en cascade :
+   1. grist.getAttachmentData()      — API Grist moderne (plugin-api.js)
+   2. grist.docApi.getAccessToken()  — token + baseUrl → fetch REST
+   3. Formulaire de saisie URL       — fallback manuel (mémorisé)
+*/
+function downloadAttachment(attachId){
+  showMsg('Chargement du fichier GEDCOM\u2026');
 
-/* Charger depuis une pièce jointe Grist
-   Grist encode les pièces jointes sous plusieurs formes possibles selon la version :
-   - tableau JS  : [1, 2, …]
-   - format "L"  : ["L", 1, 2, …]  (format sérialisé interne Grist)
-   - entier seul : 3
-   - chaîne      : "3"
-   On extrait le premier ID numérique trouvé. */
-function extractAttachIds(val){
-  if(!val && val!==0) return [];
-  /* Tableau direct */
-  if(Array.isArray(val)){
-    /* Format ["L", 1, 2, …] utilisé par le moteur de sérialisation Grist */
-    var items = val[0]==='L' ? val.slice(1) : val;
-    return items.filter(function(x){ return typeof x==='number'; });
-  }
-  /* Entier seul */
-  if(typeof val==='number') return [val];
-  /* Chaîne : essayer de parser */
-  if(typeof val==='string'){
-    var s=val.trim();
-    /* Chaîne d'un seul entier */
-    if(/^\d+$/.test(s)) return [parseInt(s,10)];
-    /* JSON */
-    try{
-      var p=JSON.parse(s);
-      return extractAttachIds(p);
-    }catch(e){}
-  }
-  return [];
-}
-
-function loadGedcomAttachment(attachVal){
-  var ids=extractAttachIds(attachVal);
-  if(!ids.length){ showAttachHelp('Aucun ID de pièce jointe dans : '+JSON.stringify(attachVal)); return; }
-  var attachId=ids[0];
-  showStatus('Chargement du fichier GEDCOM (pièce jointe #'+attachId+')…');
-
-  function onBuffer(buf){
+  function onArrayBuffer(buf){
     var text=new TextDecoder('UTF-8').decode(buf);
     if(!text.includes('0 HEAD')) text=new TextDecoder('iso-8859-1').decode(buf);
-    if(!text.includes('0 HEAD')){ showAttachHelp('Le fichier reçu ne semble pas être un GEDCOM valide (taille: '+buf.byteLength+' octets).'); return; }
-    parseGedcom(text);
-    document.getElementById('fileName').textContent='Pièce jointe #'+attachId;
-    initData(); renderApp();
+    if(!text.includes('0 HEAD')){ showError('Le fichier re\u00e7u n\'est pas un GEDCOM valide.'); return; }
+    loadText(text);
+    document.getElementById('fileName').textContent='Pi\u00e8ce jointe #'+attachId;
   }
 
-  /* Méthode 1 : grist.getAttachmentData — API moderne */
+  /* Méthode 1 : grist.getAttachmentData */
   if(typeof grist.getAttachmentData==='function'){
-    grist.getAttachmentData(attachId).then(onBuffer).catch(function(){ tryWithToken(attachId, onBuffer); });
+    grist.getAttachmentData(attachId)
+      .then(onArrayBuffer)
+      .catch(function(){ tryAccessToken(attachId, onArrayBuffer); });
     return;
   }
-
-  tryWithToken(attachId, onBuffer);
+  tryAccessToken(attachId, onArrayBuffer);
 }
 
-/* Télécharger via l'API REST Grist avec un access token */
-function tryWithToken(attachId, onBuffer){
-  /* grist.docApi.getAccessToken() renvoie {token, baseUrl} sur Grist récent */
-  var hasAccessToken = grist.docApi && typeof grist.docApi.getAccessToken==='function';
-
-  if(hasAccessToken){
-    grist.docApi.getAccessToken({readOnly:true}).then(function(tokenInfo){
-      /* baseUrl = ex: https://grist.maine-et-loire.fr/api/docs/DOCID */
-      var base = tokenInfo.baseUrl || '';
-      var url  = base+'/attachments/'+attachId+'/download?token='+tokenInfo.token;
-      console.log('[GEDCOM widget] fetch avec token:', url);
+function tryAccessToken(attachId, onArrayBuffer){
+  /* Méthode 2 : getAccessToken → URL REST */
+  var docApi=grist.docApi||null;
+  if(docApi && typeof docApi.getAccessToken==='function'){
+    docApi.getAccessToken({readOnly:true}).then(function(info){
+      /* info.baseUrl = https://grist.example.fr/api/docs/DOCID */
+      var url=info.baseUrl+'/attachments/'+attachId+'/download?token='+encodeURIComponent(info.token);
       return fetch(url);
     }).then(function(r){
       if(!r.ok) throw new Error('HTTP '+r.status);
       return r.arrayBuffer();
-    }).then(onBuffer).catch(function(e){
-      tryManualUrl(attachId, onBuffer, 'getAccessToken a échoué: '+e.message);
+    }).then(onArrayBuffer).catch(function(e){
+      showConfigForm(attachId, onArrayBuffer, e.message);
     });
     return;
   }
-
-  tryManualUrl(attachId, onBuffer, null);
+  /* Méthode 3 : formulaire */
+  showConfigForm(attachId, onArrayBuffer, null);
 }
 
-/* Dernier recours : demander l'URL Grist à l'utilisateur */
-function tryManualUrl(attachId, onBuffer, reason){
-  var saved = localStorage.getItem('grist_base_url')||'';
-  var msg = reason ? '<div style="color:#c0392b;font-size:11px;margin-bottom:8px">'+escHtml(reason)+'</div>' : '';
-
-  document.getElementById('panelTree').innerHTML =
-    '<div style="padding:1rem;max-width:500px">'+
-    '<div style="font-size:14px;font-weight:600;margin-bottom:8px">Configuration requise</div>'+
-    msg+
-    '<div style="font-size:12px;color:var(--txt2);margin-bottom:10px">'+
-    'Entrez l\'URL de base de votre instance Grist pour permettre le téléchargement de la pièce jointe.'+
-    '</div>'+
-    '<div style="font-size:11px;color:var(--txt3);margin-bottom:8px">Exemple : <code>https://grist.maine-et-loire.fr</code></div>'+
-    '<div style="display:flex;gap:8px;margin-bottom:8px">'+
-    '<input id="gristUrlInput" type="text" placeholder="https://votre-grist.exemple.fr" value="'+escHtml(saved)+'" style="flex:1;padding:6px 9px;border:.5px solid var(--border2);border-radius:var(--rsm);font-size:12px;background:var(--bg);color:var(--txt)">'+
-    '<button id="gristUrlBtn" class="btn primary">Charger</button>'+
-    '</div>'+
-    '<div id="gristUrlError" style="font-size:11px;color:#c0392b"></div>'+
+function showConfigForm(attachId, onArrayBuffer, reason){
+  var saved=tryLocal('get','grist_url')||'';
+  document.getElementById('panelTree').innerHTML=
+    '<div class="config-panel">'+
+    '<h2>URL de votre instance Grist</h2>'+
+    '<p>Le widget ne peut pas acc\u00e9der automatiquement \u00e0 votre instance Grist.<br>'+
+    'Entrez son URL une seule fois \u2014 elle sera m\u00e9moris\u00e9e.</p>'+
+    (reason?'<div class="err" style="margin-bottom:8px">'+escHtml(reason)+'</div>':'')+
+    '<label>URL de base (sans slash final)</label>'+
+    '<input id="cfgUrl" type="url" placeholder="https://grist.maine-et-loire.fr" value="'+escHtml(saved)+'">'+
+    '<label>ID du document Grist</label>'+
+    '<input id="cfgDoc" type="text" placeholder="qskHt1gisyYZ4D2eEALtyn" value="'+escHtml(tryLocal('get','grist_docid')||'')+'">'+
+    '<p style="font-size:11px;color:var(--txt3)">L\'ID du document est visible dans l\'URL de votre Grist : <code>/doc/IDENTIFIANT</code></p>'+
+    '<button class="btn primary" id="cfgBtn">Charger le fichier</button>'+
+    '<div class="err" id="cfgErr"></div>'+
     '</div>';
 
-  document.getElementById('gristUrlBtn').addEventListener('click', function(){
-    var baseUrl = document.getElementById('gristUrlInput').value.trim().replace(/\/+$/,'');
-    if(!baseUrl){ document.getElementById('gristUrlError').textContent='Veuillez entrer une URL.'; return; }
-
-    /* Stocker pour la prochaine fois */
-    try{ localStorage.setItem('grist_base_url', baseUrl); }catch(e){}
-    window._gristBaseUrl = baseUrl;
-
-    /* Récupérer le docId depuis les messages postMessage capturés */
-    var docId = window._gristDocId;
-    if(!docId){ document.getElementById('gristUrlError').textContent='DocId introuvable. Rechargez la page et réessayez.'; return; }
-
-    var url = baseUrl+'/api/docs/'+docId+'/attachments/'+attachId+'/download';
-    console.log('[GEDCOM widget] Téléchargement manuel:', url);
-    showStatus('Téléchargement en cours…');
-
-    fetch(url, {credentials:'include'})
-      .then(function(r){
-        if(!r.ok) throw new Error('HTTP '+r.status+' — vérifiez que vous êtes connecté à Grist dans un autre onglet.');
-        return r.arrayBuffer();
-      })
-      .then(onBuffer)
-      .catch(function(e){
-        showAttachHelp('Échec : '+e.message+'\nURL tentée : '+url);
-      });
+  document.getElementById('cfgBtn').addEventListener('click',function(){
+    var base=document.getElementById('cfgUrl').value.trim().replace(/\/+$/,'');
+    var docId=document.getElementById('cfgDoc').value.trim();
+    var errEl=document.getElementById('cfgErr');
+    if(!base||!docId){errEl.textContent='Les deux champs sont requis.';return;}
+    tryLocal('set','grist_url',base); tryLocal('set','grist_docid',docId);
+    showMsg('T\u00e9l\u00e9chargement\u2026');
+    var url=base+'/api/docs/'+docId+'/attachments/'+attachId+'/download';
+    fetch(url,{credentials:'include'})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+' \u2014 \u00eates-vous connect\u00e9 \u00e0 Grist ?');return r.arrayBuffer();})
+      .then(onArrayBuffer)
+      .catch(function(e){showError('Erreur : '+e.message+'\nURL : '+url);});
   });
 }
 
-/* Intercepter les messages postMessage de Grist pour capturer le docId */
-window.addEventListener('message', function(e){
-  try{
-    var d = typeof e.data==='string' ? JSON.parse(e.data) : e.data;
-    if(!d) return;
-    /* Format RPC : {method:'openDoc', args:['DOCID12345678', ...]} */
-    if(d.method==='openDoc' && d.args && typeof d.args[0]==='string'){
-      window._gristDocId = d.args[0];
-      console.log('[GEDCOM widget] docId capturé via postMessage:', window._gristDocId);
-    }
-    /* Format réponse fetchTable */
-    if(d.args && Array.isArray(d.args)){
-      d.args.forEach(function(a){
-        if(typeof a==='string' && a.length>=12 && a.length<=16 && /^[a-zA-Z0-9_-]+$/.test(a)){
-          window._gristDocId = a;
-        }
-      });
-    }
-    if(d.docId) window._gristDocId = d.docId;
-  }catch(err){}
-});
-
-function showStatus(msg){
-  document.getElementById('panelTree').innerHTML=
-    '<div style="padding:2rem;text-align:center;font-size:13px;color:var(--txt2)">'+escHtml(msg)+'</div>';
+function tryLocal(op,key,val){
+  try{if(op==='get')return localStorage.getItem(key);localStorage.setItem(key,val);}catch(e){}
+  return null;
 }
 
-function showAttachHelp(detail){
-  var extra = detail ? '<div style="margin-top:8px;font-size:11px;font-family:monospace;background:var(--bg3);padding:8px;border-radius:6px;word-break:break-all;color:var(--txt2);white-space:pre-wrap">'+escHtml(detail)+'</div>' : '';
-  document.getElementById('panelTree').innerHTML=
-    '<div style="padding:1rem">'+
-    '<div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:6px">Impossible de charger le fichier GEDCOM</div>'+
-    extra+
-    '<div style="font-size:12px;color:var(--txt2);margin-top:10px">Utilisez le bouton <strong>Ouvrir .ged</strong> en haut pour charger le fichier manuellement.</div>'+
-    '</div>';
-}
-
-function resolveStartId(ref){
-  if(!ref) return null;
-  /* ID direct avec ou sans @ */
-  var clean=ref.replace(/^@|@$/g,'');
-  if(gedData.individuals[ref])   return ref;
-  if(gedData.individuals[clean]) return clean;
-  /* Recherche par nom (insensible à la casse, correspondance partielle) */
-  var low=clean.toLowerCase();
-  return Object.keys(gedData.individuals).find(function(id){
-    var p=gedData.individuals[id];
-    return (p.name||'').toLowerCase().includes(low)||
-           (p.surname||'').toLowerCase()===low||
-           (p.given||'').toLowerCase()===low;
-  })||null;
-}
-
-function initData(){
-  filteredIds=Object.keys(gedData.individuals);
-  /* Résoudre l'individu par défaut maintenant que le GEDCOM est parsé */
-  gristDefaultId=resolveStartId(gristPendingStartRef);
-  if(gristDefaultId){treeRootId=gristDefaultId;selectedId=gristDefaultId;}
-  else if(!treeRootId||!gedData.individuals[treeRootId]){treeRootId=filteredIds[0]||null;}
-  treeNeedCenter=true;
-}
-
-/* FILE INPUT */
+/* ═══════════════════════ FILE INPUT ═══════════════════════ */
 document.getElementById('fileInput').addEventListener('change',function(e){
   var f=e.target.files[0]; if(!f) return;
   document.getElementById('fileName').textContent=f.name;
   var r=new FileReader();
-  r.onload=function(ev){parseGedcom(ev.target.result);initData();renderApp();};
+  r.onload=function(ev){loadText(ev.target.result);};
   r.readAsText(f,'UTF-8');
 });
 
-/* PARSER */
+function loadText(raw){
+  parseGedcom(raw);
+  initData();
+  renderApp();
+}
+
+/* ═══════════════════════ GEDCOM PARSER ═══════════════════════ */
 function parseGedcom(text){
   gedData={individuals:{},families:{},sources:{}};
   var lines=text.split(/\r?\n/),cur=null,curType=null,curSub=null;
@@ -491,18 +319,43 @@ function parseGedcom(text){
   });
 }
 
-/* HELPERS */
+function initData(){
+  filteredIds=Object.keys(gedData.individuals);
+  gristDefaultId=resolveId(gristPendingStartRef);
+  if(gristDefaultId){treeRootId=gristDefaultId;selectedId=gristDefaultId;}
+  else if(!treeRootId||!gedData.individuals[treeRootId]){treeRootId=filteredIds[0]||null;}
+  treeNeedCenter=true;
+}
+
+function resolveId(ref){
+  if(!ref) return null;
+  var c=ref.replace(/^@|@$/g,'');
+  if(gedData.individuals[ref]) return ref;
+  if(gedData.individuals[c])   return c;
+  var low=c.toLowerCase();
+  return Object.keys(gedData.individuals).find(function(id){
+    var p=gedData.individuals[id];
+    return (p.name||'').toLowerCase().includes(low)||
+           (p.surname||'').toLowerCase()===low||
+           (p.given||'').toLowerCase()===low;
+  })||null;
+}
+
+/* ═══════════════════════ HELPERS ═══════════════════════ */
 function initials(p){return((p.given||p.name||'').trim()[0]||'').toUpperCase()+((p.surname||'').trim()[0]||'').toUpperCase()||'?';}
 function avClass(s){return s==='M'?'av-m':s==='F'?'av-f':'av-u';}
 function badgeClass(s){return s==='M'?'badge-m':s==='F'?'badge-f':'badge-u';}
 function sexLabel(s){return s==='M'?'Homme':s==='F'?'Femme':'Inconnu';}
 var MOIS={JAN:'jan.',FEB:'f\u00e9v.',MAR:'mar.',APR:'avr.',MAY:'mai',JUN:'juin',JUL:'jul.',AUG:'ao\u00fb.',SEP:'sep.',OCT:'oct.',NOV:'nov.',DEC:'d\u00e9c.'};
-function frDate(s){if(!s)return '';return s.replace(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/gi,function(m){return MOIS[m.toUpperCase()]||m;});}
-function fmtDates(p){var b=frDate((p.birth&&p.birth.date)||''),d=frDate((p.death&&p.death.date)||'');if(b&&d)return b+' \u2013 '+d;if(b)return 'n\u00e9(e) '+b;if(d)return '\u2020 '+d;return '';}
-function escHtml(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-function emptyHtml(t,s){return '<div class="empty"><div class="empty-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="7" r="3"/><path d="M6 21v-1a6 6 0 0112 0v1"/><circle cx="4" cy="11" r="2"/><path d="M2 21v-1a4 4 0 014-4"/><circle cx="20" cy="11" r="2"/><path d="M22 21v-1a4 4 0 00-4-4"/></svg></div><div class="empty-title">'+t+'</div><div class="empty-sub">'+s+'</div></div>';}
+function frDate(s){if(!s)return'';return s.replace(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/gi,function(m){return MOIS[m.toUpperCase()]||m;});}
+function fmtDates(p){var b=frDate((p.birth&&p.birth.date)||''),d=frDate((p.death&&p.death.date)||'');if(b&&d)return b+' \u2013 '+d;if(b)return 'n\u00e9(e) '+b;if(d)return '\u2020 '+d;return'';}
+function escHtml(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function emptyHtml(t,s){return'<div class="empty"><div class="empty-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="7" r="3"/><path d="M6 21v-1a6 6 0 0112 0v1"/><circle cx="4" cy="11" r="2"/><path d="M2 21v-1a4 4 0 014-4"/><circle cx="20" cy="11" r="2"/><path d="M22 21v-1a4 4 0 00-4-4"/></svg></div><div class="empty-title">'+t+'</div><div class="empty-sub">'+s+'</div></div>';}
+function showMsg(m){document.getElementById('panelTree').innerHTML='<div style="padding:2rem;text-align:center;font-size:13px;color:var(--txt2)">'+escHtml(m)+'</div>';}
+function showError(m){document.getElementById('panelTree').innerHTML='<div style="padding:1rem"><div style="font-weight:600;margin-bottom:6px">Erreur</div><pre style="font-size:11px;white-space:pre-wrap;color:var(--txt2)">'+escHtml(m)+'</pre><div style="margin-top:10px;font-size:12px;color:var(--txt2)">Vous pouvez utiliser le bouton <strong>Ouvrir .ged</strong> pour charger le fichier manuellement.</div></div>';}
+function showEmpty(){document.getElementById('panelTree').innerHTML=emptyHtml('Aucune donn\u00e9e','Ouvrez un fichier .ged ou configurez la colonne GEDCOM dans Grist.');}
 
-/* TABS */
+/* ═══════════════════════ TABS ═══════════════════════ */
 document.querySelectorAll('.tab').forEach(function(btn){btn.addEventListener('click',function(){switchTab(btn.dataset.tab);});});
 function switchTab(t){
   activeTab=t;
@@ -515,13 +368,13 @@ function switchTab(t){
 }
 function renderApp(){switchTab(activeTab);}
 
-/* LIST */
+/* ═══════════════════════ LIST ═══════════════════════ */
 function applyFilters(){
   filteredIds=Object.keys(gedData.individuals).filter(function(id){
     var p=gedData.individuals[id];
-    if(searchNom    &&(p.surname||'').toLowerCase().indexOf(searchNom.toLowerCase())   ===-1) return false;
-    if(searchPrenom &&(p.given||'').toLowerCase().indexOf(searchPrenom.toLowerCase())  ===-1) return false;
-    if(filterSex2   &&p.sex!==filterSex2) return false;
+    if(searchNom    &&(p.surname||'').toLowerCase().indexOf(searchNom.toLowerCase())   ===-1)return false;
+    if(searchPrenom &&(p.given||'').toLowerCase().indexOf(searchPrenom.toLowerCase())  ===-1)return false;
+    if(filterSex2   &&p.sex!==filterSex2)return false;
     return true;
   });
   filteredIds.sort(function(a,b){var pa=gedData.individuals[a],pb=gedData.individuals[b];var c=(pa.surname||'').localeCompare(pb.surname||'');return c!==0?c:(pa.given||'').localeCompare(pb.given||'');});
@@ -542,13 +395,13 @@ function renderList(){
     '<div class="stat"><div class="stat-label">Sources</div><div class="stat-val">'+nSrc+'</div></div>'+
     '</div>'+
     '<div class="search-row">'+
-    '<input id="inpNom"    type="text" placeholder="Nom de famille\u2026" value="'+escHtml(searchNom)+'" style="flex:1">'+
+    '<input id="inpNom" type="text" placeholder="Nom de famille\u2026" value="'+escHtml(searchNom)+'" style="flex:1">'+
     '<input id="inpPrenom" type="text" placeholder="Pr\u00e9nom\u2026" value="'+escHtml(searchPrenom)+'" style="flex:1">'+
     '<select id="sexSel2"><option value="">Tous</option><option value="M"'+(filterSex2==='M'?' selected':'')+'>H</option><option value="F"'+(filterSex2==='F'?' selected':'')+'>F</option></select>'+
     '</div>'+
     '<div style="overflow-x:auto;flex:1"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Helvetica Neue,Arial,sans-serif">'+
     '<thead><tr style="border-bottom:.5px solid var(--border2)">'+
-    ['Nom','Pr\u00e9nom','Naissance','Lieu'].map(function(h){return '<th style="text-align:left;padding:5px 8px;font-weight:500;color:var(--txt2);font-size:10px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:var(--bg)">'+h+'</th>';}).join('')+
+    ['Nom','Pr\u00e9nom','Naissance','Lieu'].map(function(h){return'<th style="text-align:left;padding:5px 8px;font-weight:500;color:var(--txt2);font-size:10px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:var(--bg)">'+h+'</th>';}).join('')+
     '</tr></thead><tbody id="indTbody"></tbody></table></div>'+
     '<div class="pager"><button id="btnPrev"'+(currentPage===0?' disabled':'')+'>&#8592; Pr\u00e9c.</button>'+
     '<span>'+Math.min(currentPage*PAGE+1,total)+'\u2013'+Math.min((currentPage+1)*PAGE,total)+' / '+total+'</span>'+
@@ -586,7 +439,7 @@ function updatePager(){
   if(s)s.textContent=Math.min(currentPage*PAGE+1,total)+'\u2013'+Math.min((currentPage+1)*PAGE,total)+' / '+total;
 }
 
-/* FAMILIES */
+/* ═══════════════════════ FAMILIES ═══════════════════════ */
 function renderFamilies(){
   var el=document.getElementById('panelFamilies'); if(!el) return;
   var fids=Object.keys(gedData.families);
@@ -607,19 +460,19 @@ function renderFamilies(){
   el.querySelectorAll('.link[data-id]').forEach(function(lnk){lnk.addEventListener('click',function(){selectPerson(lnk.dataset.id);});});
 }
 
-/* DETAIL HTML */
+/* ═══════════════════════ DETAIL ═══════════════════════ */
 function buildDetailHtml(pid){
-  var p=gedData.individuals[pid]; if(!p) return '';
+  var p=gedData.individuals[pid]; if(!p)return'';
   var fams=gedData.families,pr='',uh='';
   p.famc.forEach(function(fid){
-    var fam=fams[fid]; if(!fam) return;
-    if(fam.husb&&gedData.individuals[fam.husb]) pr+='<div class="detail-row"><span class="dk">P\u00e8re</span><span class="dv"><span class="link" data-id="'+fam.husb+'">'+escHtml(gedData.individuals[fam.husb].name)+'</span></span></div>';
-    if(fam.wife&&gedData.individuals[fam.wife]) pr+='<div class="detail-row"><span class="dk">M\u00e8re</span><span class="dv"><span class="link" data-id="'+fam.wife+'">'+escHtml(gedData.individuals[fam.wife].name)+'</span></span></div>';
+    var fam=fams[fid]; if(!fam)return;
+    if(fam.husb&&gedData.individuals[fam.husb])pr+='<div class="detail-row"><span class="dk">P\u00e8re</span><span class="dv"><span class="link" data-id="'+fam.husb+'">'+escHtml(gedData.individuals[fam.husb].name)+'</span></span></div>';
+    if(fam.wife&&gedData.individuals[fam.wife])pr+='<div class="detail-row"><span class="dk">M\u00e8re</span><span class="dv"><span class="link" data-id="'+fam.wife+'">'+escHtml(gedData.individuals[fam.wife].name)+'</span></span></div>';
   });
   p.fams.forEach(function(fid){
-    var fam=fams[fid]; if(!fam) return;
+    var fam=fams[fid]; if(!fam)return;
     var spId=fam.husb===pid?fam.wife:fam.husb,sp=spId?gedData.individuals[spId]:null,ch='';
-    if(fam.chil.length) ch='<div style="margin-top:6px"><div class="fam-sub" style="margin-bottom:3px">Enfants :</div>'+fam.chil.map(function(cid){var c=gedData.individuals[cid];return c?'<div class="fam-sub"><span class="link" data-id="'+cid+'">'+escHtml(c.name)+'</span></div>':'';}).join('')+'</div>';
+    if(fam.chil.length)ch='<div style="margin-top:6px"><div class="fam-sub" style="margin-bottom:3px">Enfants :</div>'+fam.chil.map(function(cid){var c=gedData.individuals[cid];return c?'<div class="fam-sub"><span class="link" data-id="'+cid+'">'+escHtml(c.name)+'</span></div>':'';}).join('')+'</div>';
     uh+='<div class="fam-card"><div class="fam-title">'+(sp?'<span class="link" data-id="'+spId+'">'+escHtml(sp.name)+'</span>':'Conjoint inconnu')+(fam.marr&&fam.marr.date?' \u00b7 <span style="font-weight:400">'+escHtml(frDate(fam.marr.date))+'</span>':'')+'</div>'+(fam.marr&&fam.marr.place?'<div class="fam-sub">'+escHtml(fam.marr.place)+'</div>':'')+ch+'</div>';
   });
   var bS=escHtml([frDate((p.birth&&p.birth.date)||''),(p.birth&&p.birth.place)||''].filter(Boolean).join(' \u2013 '))||'\u2014';
@@ -632,37 +485,40 @@ function buildDetailHtml(pid){
     '<div class="detail-box"><div class="detail-box-title">\u00c9tat civil</div>'+
     '<div class="detail-row"><span class="dk">Naissance</span><span class="dv">'+bS+'</span></div>'+
     '<div class="detail-row"><span class="dk">D\u00e9c\u00e8s</span><span class="dv">'+dS+'</span></div>'+
-    pr+'<div class="detail-row"><span class="dk">R\u00e9f. GEDCOM</span><span class="dv" style="font-family:monospace;font-size:10px;color:var(--txt2)">'+escHtml(pid)+'</span></div></div>'+
+    pr+'<div class="detail-row"><span class="dk">R\u00e9f.</span><span class="dv" style="font-family:monospace;font-size:10px;color:var(--txt2)">'+escHtml(pid)+'</span></div></div>'+
     (uh?'<div><div class="sec-title">Unions &amp; descendance</div>'+uh+'</div>':'')+
     (p.notes&&p.notes.filter(Boolean).length?'<div class="detail-box" style="margin-top:8px"><div class="detail-box-title">Notes</div><div style="font-size:12px;color:var(--txt2);line-height:1.5">'+escHtml(p.notes.join(' '))+'</div></div>':'');
 }
+
 function bindSidebar(el,pid){
   el.querySelectorAll('.link[data-id]').forEach(function(lnk){lnk.addEventListener('click',function(){selectPerson(lnk.dataset.id);});});
   var pin=document.getElementById('btnPinRoot');
-  if(pin) pin.addEventListener('click',function(){treeRootId=pid;treeNeedCenter=true;drawTree();});
+  if(pin)pin.addEventListener('click',function(){treeRootId=pid;treeNeedCenter=true;drawTree();});
   var close=document.getElementById('btnCloseSidebar');
-  if(close) close.addEventListener('click',function(){var sb=document.getElementById('treeSidebar');if(sb)sb.style.display='none';});
+  if(close)close.addEventListener('click',function(){var sb=document.getElementById('treeSidebar');if(sb)sb.style.display='none';});
 }
+
 function showSidebar(pid){
   selectedId=pid;
-  var sb=document.getElementById('treeSidebar'); if(!sb) return;
+  var sb=document.getElementById('treeSidebar'); if(!sb)return;
   sb.innerHTML=buildDetailHtml(pid);
   sb.style.display='block';
   bindSidebar(sb,pid);
 }
 
-/* SELECT */
+/* ═══════════════════════ SELECT ═══════════════════════ */
 function selectPerson(id){
   selectedId=id;treeRootId=id;treeNeedCenter=true;
   if(activeTab==='tree'){drawTree();showSidebar(id);}
   else switchTab('tree');
 }
 
-/* TREE */
+/* ═══════════════════════ TREE ═══════════════════════ */
 var treeZoom=1.0,treePanX=0,treePanY=0,treeNeedCenter=true,treeOrientation='V';
 
 function renderTree(){
   var el=document.getElementById('panelTree'); if(!el) return;
+  if(!Object.keys(gedData.individuals).length){ showEmpty(); return; }
   el.innerHTML=
     '<div class="tree-controls">'+
     '<span id="treeLabel" style="font-size:12px;color:var(--txt2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>'+
@@ -677,16 +533,12 @@ function renderTree(){
     '<div id="treeSidebar"></div>'+
     '</div>';
 
-  if(!treeRootId||!gedData.individuals[treeRootId]){
-    document.getElementById('treeViewport').innerHTML='<div style="padding:3rem;text-align:center;font-size:13px;color:var(--txt2)">S\u00e9lectionnez un individu dans la liste ou ouvrez un fichier GEDCOM.</div>';
-    return;
-  }
   document.getElementById('btnOrient').addEventListener('click',function(){treeOrientation=treeOrientation==='H'?'V':'H';document.getElementById('btnOrient').textContent=treeOrientation==='H'?'Vertical':'Horizontal';treeNeedCenter=true;drawTree();});
   document.getElementById('btnZoomIn').addEventListener('click',function(){treeZoom=Math.min(2.5,treeZoom*1.2);drawTree();});
   document.getElementById('btnZoomOut').addEventListener('click',function(){treeZoom=Math.max(0.2,treeZoom/1.2);drawTree();});
   document.getElementById('btnZoomFit').addEventListener('click',function(){treeNeedCenter=true;drawTree();});
   setupDrag(); setupTreeClick(); treeNeedCenter=true; drawTree();
-  showSidebar(treeRootId);
+  if(treeRootId) showSidebar(treeRootId);
 }
 
 function setupDrag(){
@@ -826,13 +678,12 @@ function setupTreeClick(){
 }
 window.addEventListener('resize',function(){if(activeTab==='tree')drawTree();});
 
-/* POLYFILL */
+/* ═══════════════════════ POLYFILL + INIT ═══════════════════════ */
 if(!CanvasRenderingContext2D.prototype.roundRect){
   CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){var R=Math.min(r,w/2,h/2);this.moveTo(x+R,y);this.lineTo(x+w-R,y);this.arcTo(x+w,y,x+w,y+R,R);this.lineTo(x+w,y+h-R);this.arcTo(x+w,y+h,x+w-R,y+h,R);this.lineTo(x+R,y+h);this.arcTo(x,y+h,x,y+h-R,R);this.lineTo(x,y+R);this.arcTo(x,y,x+R,y,R);this.closePath();};
 }
 
-/* INIT */
-document.getElementById('panelTree').innerHTML=emptyHtml('Aucune donn\u00e9e charg\u00e9e','Ouvrez un fichier .ged Ancestris ou connectez une colonne GEDCOM dans Grist.');
+showEmpty();
 try{initGrist();}catch(e){}
 </script>
 </body>
