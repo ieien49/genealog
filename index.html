@@ -198,23 +198,64 @@ function downloadAttachment(attachId){
 }
 
 function tryAccessToken(attachId, onArrayBuffer){
-  /* Méthode 2 : getAccessToken → URL REST */
   var docApi=grist.docApi||null;
-  if(docApi && typeof docApi.getAccessToken==='function'){
-    docApi.getAccessToken({readOnly:true}).then(function(info){
-      /* info.baseUrl = https://grist.example.fr/api/docs/DOCID */
-      var url=info.baseUrl+'/attachments/'+attachId+'/download?token='+encodeURIComponent(info.token);
-      return fetch(url);
-    }).then(function(r){
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      return r.arrayBuffer();
-    }).then(onArrayBuffer).catch(function(e){
-      showConfigForm(attachId, onArrayBuffer, e.message);
-    });
+  if(!docApi || typeof docApi.getAccessToken!=='function'){
+    showConfigForm(attachId, onArrayBuffer, null);
     return;
   }
-  /* Méthode 3 : formulaire */
-  showConfigForm(attachId, onArrayBuffer, null);
+
+  docApi.getAccessToken({readOnly:true}).then(function(info){
+    /* info.baseUrl et info.token sont disponibles.
+       On ne peut pas faire fetch() à cause du CORS mal configuré côté serveur.
+       Solution : charger l'URL dans une iframe cachée, intercepter via postMessage,
+       ou proposer un lien de téléchargement direct que l'utilisateur glisse dans le widget. */
+    var url = info.baseUrl + '/attachments/' + attachId + '/download?token=' + encodeURIComponent(info.token);
+
+    /* Tentative XHR — parfois moins strict que fetch sur les headers CORS */
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.responseType = 'arraybuffer';
+    xhr.withCredentials = true;
+    xhr.onload = function(){
+      if(xhr.status >= 200 && xhr.status < 300){
+        onArrayBuffer(xhr.response);
+      } else {
+        showDownloadLink(url, onArrayBuffer);
+      }
+    };
+    xhr.onerror = function(){
+      showDownloadLink(url, onArrayBuffer);
+    };
+    xhr.send();
+
+  }).catch(function(e){
+    showConfigForm(attachId, onArrayBuffer, e.message);
+  });
+}
+
+/* Afficher un lien de téléchargement direct + zone de dépôt de fichier.
+   Contourne le CORS en laissant le navigateur télécharger, puis l'utilisateur
+   glisse le fichier dans le widget — ou le charge via le bouton Ouvrir .ged. */
+function showDownloadLink(url, onArrayBuffer){
+  document.getElementById('panelTree').innerHTML =
+    '<div class="config-panel">' +
+    '<h2>Configuration CORS requise</h2>' +
+    '<p>Votre instance Grist refuse les requ\u00eates cross-origin depuis ce widget.<br>' +
+    'Deux options :</p>' +
+    '<div style="background:var(--bg2);border-radius:var(--rsm);padding:12px;margin-bottom:12px">' +
+    '<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--txt)">Option 1 &mdash; T\u00e9l\u00e9charger puis charger</div>' +
+    '<div style="font-size:12px;color:var(--txt2);margin-bottom:8px">Cliquez pour t\u00e9l\u00e9charger votre fichier GEDCOM, puis utilisez le bouton <strong>Ouvrir .ged</strong> en haut.</div>' +
+    '<a href="' + escHtml(url) + '" download class="btn primary" style="display:inline-flex;text-decoration:none">&#8595; T\u00e9l\u00e9charger le fichier GEDCOM</a>' +
+    '</div>' +
+    '<div style="background:var(--bg2);border-radius:var(--rsm);padding:12px">' +
+    '<div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--txt)">Option 2 &mdash; Corriger le CORS (recommand\u00e9)</div>' +
+    '<div style="font-size:12px;color:var(--txt2);margin-bottom:6px">Dans votre configuration nginx, supprimez le header CORS dupliqu\u00e9 :</div>' +
+    '<pre style="font-size:11px;background:var(--bg3);padding:8px;border-radius:var(--rsm);overflow-x:auto">' +
+    '# Supprimer cette ligne si pr\u00e9sente dans votre bloc nginx :\n' +
+    'add_header Access-Control-Allow-Origin *;\n\n' +
+    '# Grist g\u00e8re lui-m\u00eame ses headers CORS.</pre>' +
+    '</div>' +
+    '</div>';
 }
 
 function showConfigForm(attachId, onArrayBuffer, reason){
